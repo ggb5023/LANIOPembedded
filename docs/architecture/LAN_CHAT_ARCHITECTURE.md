@@ -25,7 +25,14 @@ C 底层协议与传输能力
 - 多个聊天客户端连接服务器。
 - 客户端之间不直接传输聊天消息，所有文本消息经服务端中转。
 - v1 采用全员可聊模型：登录用户可以看到用户列表，并向任意用户发起私聊。
-- v1 优先 CLI 客户端，后续再扩展 Qt GUI 和 Launcher。
+- v1 优先 CLI 客户端，当前后续开发不做 GUI，不做好友聊天系统。
+
+工程开发规则：
+
+- 固定规则见 `docs/architecture/LAN_CHAT_DEVELOPMENT_RULES.md`。
+- 后续功能推进顺序固定为：私聊文本 -> 群聊文本 -> 文件传输 -> 音频通话 -> 视频通话。
+- 工程开发必须符合实际工程开发方式：先边界、接口和验收，再工程骨架、最小闭环和测试。
+- 设计原则固定为：轻量边界，稳定可靠。
 
 第一阶段明确不做：
 
@@ -174,7 +181,7 @@ lan_chat_platform_win32
 - `chat_server` 应用层负责选择并注入 storage 实现，v1 默认注入 `lan_chat_storage_mysql_c`。
 - `lan_chat_storage_memory_c` 只能用于测试和无数据库 smoke，不作为生产默认实现。
 - C++ 层封装 C handle、错误和生命周期，但不改变底层 C API 的可用性。
-- 第一阶段先保证 CLI 端到端聊天闭环，再扩展 GUI。
+- 当前阶段先保证 CLI 私聊文本端到端闭环，再推进群聊文本、文件传输、音频通话和视频通话。
 
 Phase 1 固定目录结构：
 
@@ -581,9 +588,7 @@ lan_chat::Result<std::vector<Message>> Client::pullPendingDeliveries();
   - 借鉴旧 C++ 工程 Runtime Launcher。
   - 管理 server/client 启停、日志收集、LAN 检查。
 
-- `apps/chat_qt`
-  - Qt 桌面客户端。
-  - 在 CLI 和底层稳定后再实现。
+当前后续开发不创建 `apps/chat_qt`。GUI 不属于当前工程主线。
 
 ## 5. v1 功能范围
 
@@ -620,7 +625,7 @@ v1 不实现：
 - 端到端加密。
 - 多服务端联邦。
 
-这些能力等 v1 私聊闭环稳定后再规划。好友/联系人关系作为 v2 扩展，不影响 v1 全员可聊模型。
+这些能力中的群聊文本、文件传输、音频通话和视频通话按工程开发规则文档顺序推进。当前后续开发不做好友/联系人系统，不创建好友关系前置条件。
 
 ## 6. 协议设计
 
@@ -706,7 +711,7 @@ v1 消息组：
 - `ERROR`
   - error rsp
 
-v1 不包含 `CONTACT` 消息组。联系人、好友申请、好友审批放入 v2。
+v1 不包含 `CONTACT` 消息组。当前后续开发不规划联系人、好友申请或好友审批协议。
 
 ### 6.4 消息投递语义
 
@@ -845,7 +850,6 @@ vcpkg 可以作为依赖管理工具，但不能污染 C Core。
 - MySQL C API/libmysql。
 - 日志。
 - JSON 配置。
-- 后续 Qt/GUI 辅助库。
 
 禁止 vcpkg 进入：
 
@@ -945,89 +949,13 @@ config/
 
 ## 11. 测试与验收
 
-### 11.1 文档校验
+测试体系以 `docs/architecture/LAN_CHAT_TESTING.md` 为唯一入口。本文档只保留主架构测试边界：
 
-必须确认：
-
-- 文档不再把 IoT、嵌入式、gateway、telemetry 作为主线。
-- 文档不再推荐 SQLite 作为 v1 默认存储。
-- 文档不再把 `mysql-connector-cpp` 作为优先 MySQL 依赖。
-- 文档明确 MySQL 默认实现使用 MySQL C API/libmysql。
-- 文档明确 v1 全员可聊，好友/联系人申请进入 v2。
-- 文档明确 `uint64 user_id` 是协议、会话、消息和数据库外键的统一用户标识。
-- 文档明确禁止明文密码存储，auth 使用 salt/hash。
-- 文档明确 UDP discovery 不作为 Phase 1 或 CLI E2E 阻塞项。
-
-### 11.2 C Core 单元测试
-
-详细验收见 `docs/architecture/LAN_CHAT_PROTOCOL.md`。本节保留主架构验收摘要，必须覆盖：
-
-- header encode/decode。
-- header 64 bytes 固定布局和字段 offset。
-- TLV encode/decode。
-- TLV required/optional bit。
-- TLV unknown optional skip。
-- TLV unknown required reject。
-- TLV duplicate field reject。
-- 非法 magic。
-- 非法 version。
-- 非法 header_len。
-- 非法 body_len。
-- reserved bits 非 0。
-- 大端序读写。
-- packet size 边界。
-- ring buffer wraparound。
-- TCP 半包。
-- TCP 粘包。
-- TCP 一次输入多个完整包。
-- framer 半包返回 `LAN_CHAT_STATUS_NEED_MORE_DATA`。
-- framer 非法 header 返回错误且不自动流恢复。
-- body 超过 `LAN_CHAT_MAX_BODY_LEN` 必须拒绝。
-
-### 11.3 服务端单元测试
-
-必须覆盖：
-
-- session registry。
-- 登录态绑定。
-- 单账号 kick-old。
-- presence online/offline。
-- user list。
-- chat send -> store ack。
-- receiver offline -> pending delivery。
-- heartbeat timeout。
-
-### 11.4 MySQL 集成测试
-
-必须覆盖：
-
-- schema 初始化。
-- 注册用户。
-- 登录验证。
-- 禁止明文密码字段和明文测试种子数据。
-- 用户列表查询。
-- 消息写入。
-- `message_deliveries` pending 查询。
-- `message_deliveries` delivered/acked 状态更新。
-- 历史消息查询。
-
-### 11.5 端到端测试
-
-必须覆盖：
-
-- 启动 `chat_server`。
-- 启动两个 `chat_cli`。
-- A/B 登录。
-- A 给 B 发送在线私聊。
-- B 收到消息并 ACK。
-- B 下线。
-- A 给 B 发送离线消息。
-- B 重连后从 `message_deliveries` 拉取待投递消息。
-- B 查询历史消息。
-- 服务端停止后客户端感知断线。
-- 服务端恢复后客户端可以重新登录或恢复 session。
-- CLI E2E 使用手动配置服务器地址，不依赖 UDP discovery。
-- C++ RAII 测试覆盖 client/server/storage/session 释放。
+- 默认测试必须轻量、可重复，不依赖外部 MySQL 服务。
+- `lan_chat_skeleton_tests` 覆盖当前库级 core/storage/transport/server E2E。
+- `lan_chat_app_e2e` 覆盖真实 `chat_server + chat_cli e2e` 进程级闭环。
+- `lan_chat_mysql_storage_tests` 是显式可选集成测试，只在 `LAN_CHAT_ENABLE_MYSQL_TESTS=ON` 时进入 CTest。
+- 未实现能力不得写成当前默认测试阻塞项，应先进入测试 backlog。
 
 ## 12. 分阶段开发路线
 
@@ -1065,7 +993,7 @@ config/
 
 ### Phase 3: Windows TCP Transport
 
-详细验收见 `docs/architecture/LAN_CHAT_TRANSPORT_WIN32.md`。本节保留主架构验收摘要，必须覆盖：
+详细验收见 `docs/architecture/LAN_CHAT_TRANSPORT_WIN32.md`，测试入口见 `docs/architecture/LAN_CHAT_TESTING.md`。本节只保留交付摘要：
 
 交付：
 
@@ -1079,7 +1007,7 @@ config/
 
 ### Phase 4: C Storage Core + MySQL Storage
 
-详细验收见 `docs/architecture/LAN_CHAT_STORAGE.md`。本节保留主架构验收摘要，必须覆盖：
+详细验收见 `docs/architecture/LAN_CHAT_STORAGE.md`，测试入口见 `docs/architecture/LAN_CHAT_TESTING.md`。本节只保留交付摘要：
 
 交付：
 
@@ -1089,7 +1017,7 @@ config/
 - libmysql 连接。
 - schema 初始化。
 - accounts/messages/message_deliveries 基础操作。
-- MySQL 集成测试。
+- MySQL 集成测试能力，默认测试不启用。
 
 ### Phase 5: C++ Wrapper
 
@@ -1122,23 +1050,18 @@ config/
 - 测试配置。
 - 日志收集。
 - LAN 检查。
-- 后续 Launcher 设计。
 
-## 13. v2 规划边界
+## 13. 后续规划边界
 
-v2 可规划：
+后续能力按以下顺序规划：
 
-- 好友申请。
-- 联系人关系。
-- 黑名单。
-- 群聊。
-- 文件传输。
-- Qt GUI。
-- Runtime Launcher。
-- 消息已读回执。
-- SQLite 轻量部署适配。
+1. 私聊文本稳定化。
+2. 群聊文本。
+3. 文件传输。
+4. 音频通话。
+5. 视频通话。
 
-v2 不应反向污染 v1 的核心目标。v1 的验收标准始终是全员可聊私聊闭环。
+当前后续开发不做 GUI，不做好友聊天系统。任何后续能力不得反向污染 v1 的核心目标；v1 的验收标准始终是全员可聊私聊文本闭环。
 
 ## 14. 旧错误方向排除
 

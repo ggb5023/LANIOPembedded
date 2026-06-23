@@ -204,7 +204,7 @@ Phase 5 最小实现不保存明文密码：
 
 ## 8. E2E 验收
 
-最小 E2E 必须覆盖：
+最小 E2E 验收边界：
 
 - server 使用 memory storage 启动。
 - client A register 成功，得到 user_id/session_id。
@@ -217,3 +217,5 @@ Phase 5 最小实现不保存明文密码：
 - server shutdown 后 socket 关闭干净。
 
 MySQL storage 已由 Phase 4 集成测试覆盖；本阶段 E2E 默认使用 memory storage，避免数据库服务状态影响普通测试。
+
+具体默认测试入口和运行方式见 `docs/architecture/LAN_CHAT_TESTING.md`。

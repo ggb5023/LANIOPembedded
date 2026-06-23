@@ -302,20 +302,9 @@ UDP discovery 不参与 Phase 3 验收，不得成为 CLI E2E 的阻塞项。
 
 ## 12. Smoke 验收
 
-Phase 3 最小闭环测试固定覆盖：
+Phase 3 最小闭环测试固定为 Windows TCP heartbeat smoke：listener/client/connect/accept/queue/flush/recv/close 全链路可运行，半包、粘包和多包行为由 core framer 测试覆盖。
 
-- WinSock init/shutdown 可重复配对调用。
-- listener 在 `127.0.0.1` 启动。
-- client connect 到 listener。
-- server accept 得到 accepted connection。
-- client queue + flush 一个 heartbeat request packet。
-- server recv 得到完整 packet，并校验 group/type/flags/body_len。
-- server queue + flush 一个 heartbeat response packet。
-- client recv 得到完整 response packet。
-- 半包输入通过 framer 恢复完整 packet。
-- 粘包输入可以连续取出多个完整 packet。
-- 两个 client 顺序连接和收发，不串包。
-- close listener/connection 后重复 close 安全。
+具体默认测试入口和运行方式见 `docs/architecture/LAN_CHAT_TESTING.md`。
 
 非目标：
 
@@ -332,5 +321,5 @@ Phase 3 最小闭环测试固定覆盖：
 - packet 收发必须经过 `lan_chat_packet_pack()` 和 `lan_chat_framer_t`。
 - `LAN_CHAT_PROTOCOL.md` 中的 header、flags、message group 约定保持一致。
 - UDP discovery 仍为后置能力。
-- 现有 protocol/core 单元测试继续通过。
-- 新增 transport smoke test 在 Windows/MSVC Debug 配置下通过。
+- 现有 protocol/core 默认测试继续通过。
+- Windows/MSVC Debug 默认测试中的 transport smoke 继续通过。

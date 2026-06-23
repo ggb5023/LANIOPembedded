@@ -290,10 +290,10 @@ Phase 4 开发顺序固定为：
 
 ## 7. 验收检查
 
-- storage 单元测试覆盖账号创建、重复用户名、登录记录查询、用户列表。
-- storage 单元测试覆盖私聊消息写入、conversation 复用、历史分页。
-- storage 单元测试覆盖 pending delivery 查询、delivered/acked 状态更新和状态回退拒绝。
+- memory storage 默认测试覆盖账号、私聊消息、历史分页、pending delivery 和 delivery 状态基础行为。
+- MySQL storage 集成测试是显式可选项，不进入默认 CTest。
 - memory backend 行为与本文档一致。
 - MySQL backend 不向 public header 暴露 `MYSQL*`。
 - schema 不包含 `contacts`、`offline_messages`、`client_acks`。
 - schema 和测试数据不包含明文密码字段。
+- 具体测试入口和运行方式见 `docs/architecture/LAN_CHAT_TESTING.md`。

@@ -161,7 +161,7 @@ v1 消息组：
 - `ERROR`
   - error rsp
 
-v1 不包含 `CONTACT` 消息组。联系人、好友申请、好友审批放入 v2。
+v1 不包含 `CONTACT` 消息组。当前后续开发不规划联系人、好友申请或好友审批协议。
 
 ## 6. Flags And Status
 
@@ -321,26 +321,6 @@ server -> MySQL: mark delivery acked
 
 ## 11. Phase 2 测试验收
 
-C Core 单元测试必须覆盖：
+C Core 单元测试覆盖 header/packet/TLV/endian/ring buffer/framer 的当前实现行为。具体默认测试入口和运行方式见 `docs/architecture/LAN_CHAT_TESTING.md`。
 
-- header encode/decode。
-- header 64 bytes 固定布局和字段 offset。
-- TLV encode/decode。
-- TLV required/optional bit。
-- TLV unknown optional skip。
-- TLV unknown required reject。
-- TLV duplicate field reject。
-- 非法 magic。
-- 非法 version。
-- 非法 header_len。
-- 非法 body_len。
-- reserved bits 非 0。
-- 大端序读写。
-- packet size 边界。
-- ring buffer wraparound。
-- TCP 半包。
-- TCP 粘包。
-- TCP 一次输入多个完整包。
-- framer 半包返回 `LAN_CHAT_STATUS_NEED_MORE_DATA`。
-- framer 非法 header 返回错误且不自动流恢复。
-- body 超过 `LAN_CHAT_MAX_BODY_LEN` 必须拒绝。
+Phase 2 文档只保留协议验收边界：header 固定布局、TLV 必要校验、packet size 边界和 framer 半包/粘包/多包行为必须有测试覆盖。
