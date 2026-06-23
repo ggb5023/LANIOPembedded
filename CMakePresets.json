@@ -1,0 +1,73 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 26,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "windows-vs2022-debug",
+      "displayName": "Windows VS2022 Debug",
+      "generator": "Visual Studio 17 2022",
+      "binaryDir": "${sourceDir}/out/build/windows-vs2022-debug",
+      "cacheVariables": {
+        "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+        "VCPKG_MANIFEST_DIR": "${sourceDir}",
+        "VCPKG_INSTALLED_DIR": "${sourceDir}/vcpkg_installed",
+        "VCPKG_TARGET_TRIPLET": "x64-windows",
+        "LAN_CHAT_BUILD_TESTS": "ON",
+        "LAN_CHAT_BUILD_APPS": "ON",
+        "LAN_CHAT_USE_VCPKG_DEPS": "ON",
+        "LAN_CHAT_CORE_NO_DEPS": "ON"
+      }
+    },
+    {
+      "name": "windows-vs2022-release",
+      "displayName": "Windows VS2022 Release",
+      "inherits": "windows-vs2022-debug",
+      "binaryDir": "${sourceDir}/out/build/windows-vs2022-release",
+      "cacheVariables": {
+        "LAN_CHAT_BUILD_TESTS": "OFF"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "build-debug",
+      "configurePreset": "windows-vs2022-debug",
+      "configuration": "Debug",
+      "targets": [
+        "lan_chat_core_c",
+        "lan_chat_platform_win32",
+        "lan_chat_transport_c",
+        "lan_chat_storage_mysql_c",
+        "lan_chat_storage_memory_c",
+        "lan_chat_server_c",
+        "lan_chat_cpp",
+        "chat_server",
+        "chat_cli",
+        "lan_chat_skeleton_tests"
+      ]
+    },
+    {
+      "name": "build-release",
+      "configurePreset": "windows-vs2022-release",
+      "configuration": "Release",
+      "targets": [
+        "chat_server",
+        "chat_cli"
+      ]
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "test-debug",
+      "configurePreset": "windows-vs2022-debug",
+      "configuration": "Debug",
+      "output": {
+        "outputOnFailure": true
+      }
+    }
+  ]
+}

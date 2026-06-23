@@ -1,0 +1,37 @@
+#ifndef LAN_CHAT_CORE_STATUS_H
+#define LAN_CHAT_CORE_STATUS_H
+
+#include <stdint.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+typedef enum lan_chat_status {
+    LAN_CHAT_STATUS_OK = 0,
+    LAN_CHAT_STATUS_INVALID_ARGUMENT = 1,
+    LAN_CHAT_STATUS_NOT_IMPLEMENTED = 2,
+    LAN_CHAT_STATUS_OUT_OF_MEMORY = 3,
+    LAN_CHAT_STATUS_STORAGE_ERROR = 4,
+    LAN_CHAT_STATUS_NETWORK_ERROR = 5,
+    LAN_CHAT_STATUS_INTERNAL_ERROR = 6,
+    LAN_CHAT_STATUS_NEED_MORE_DATA = 7,
+    LAN_CHAT_STATUS_BAD_MAGIC = 8,
+    LAN_CHAT_STATUS_UNSUPPORTED_VERSION = 9,
+    LAN_CHAT_STATUS_BAD_HEADER = 10,
+    LAN_CHAT_STATUS_BODY_TOO_LARGE = 11,
+    LAN_CHAT_STATUS_UNSUPPORTED_FIELD = 12,
+    LAN_CHAT_STATUS_DUPLICATE_FIELD = 13,
+    LAN_CHAT_STATUS_BUFFER_TOO_SMALL = 14,
+    LAN_CHAT_STATUS_ALREADY_EXISTS = 15,
+    LAN_CHAT_STATUS_NOT_FOUND = 16,
+    LAN_CHAT_STATUS_INVALID_STATE = 17
+} lan_chat_status_t;
+
+const char *lan_chat_status_name(lan_chat_status_t status);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif

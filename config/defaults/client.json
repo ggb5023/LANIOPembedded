@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "server": {
+    "host": "127.0.0.1",
+    "port": 7777
+  },
+  "discovery": {
+    "enabled": false
+  },
+  "identity": {
+    "username_default": ""
+  },
+  "logging": {
+    "level": "info"
+  },
+  "runtime": {
+    "local_runtime_dir": "${repo}/data/client"
+  }
+}

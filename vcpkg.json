@@ -1,0 +1,11 @@
+{
+  "name": "lan-chat",
+  "version-string": "0.1.0",
+  "dependencies": [
+    "libmysql",
+    "nlohmann-json",
+    "fmt",
+    "spdlog",
+    "gtest"
+  ]
+}

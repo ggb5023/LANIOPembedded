@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "listen": {
+    "host": "0.0.0.0",
+    "port": 7777
+  },
+  "discovery": {
+    "enabled": false,
+    "udp_port": 7778
+  },
+  "runtime": {
+    "worker_thread_count": 4,
+    "heartbeat_timeout_seconds": 30
+  },
+  "logging": {
+    "level": "info"
+  },
+  "mysql": {
+    "host": "127.0.0.1",
+    "port": 3306,
+    "database": "lan_chat",
+    "user": "root",
+    "password": "",
+    "connection_pool_size": 4
+  }
+}
