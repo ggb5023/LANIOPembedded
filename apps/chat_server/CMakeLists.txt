@@ -3,8 +3,8 @@ add_executable(chat_server
 )
 target_link_libraries(chat_server
     PRIVATE
-        lan_chat_cpp
         lan_chat_server_c
+        lan_chat_storage_memory_c
         lan_chat_storage_mysql_c
 )
 if (LAN_CHAT_MYSQL_RUNTIME_DLL)

@@ -13,6 +13,7 @@ Result<Server> Server::start(const ServerConfig &config)
 {
     lan_chat_server_t server{};
     lan_chat_server_config_t c_config{};
+    c_config.listen_host = config.listen_host.c_str();
     c_config.listen_port = config.listen_port;
     c_config.worker_thread_count = config.worker_thread_count;
     c_config.storage = config.storage;

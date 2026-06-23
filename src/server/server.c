@@ -683,7 +683,11 @@ lan_chat_status_t lan_chat_server_init(
         memset(server, 0, sizeof(*server));
         return status;
     }
-    status = lan_chat_tcp_listener_open(&server->listener, "127.0.0.1", config->listen_port, LAN_CHAT_TRANSPORT_DEFAULT_BACKLOG);
+    status = lan_chat_tcp_listener_open(
+        &server->listener,
+        config->listen_host != 0 && config->listen_host[0] != '\0' ? config->listen_host : "127.0.0.1",
+        config->listen_port,
+        LAN_CHAT_TRANSPORT_DEFAULT_BACKLOG);
     if (status != LAN_CHAT_STATUS_OK) {
         lan_chat_transport_shutdown(&server->transport);
         free(server->clients);

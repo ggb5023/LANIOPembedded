@@ -519,7 +519,7 @@ Phase 4 Storage 详细规格独立存放在 `docs/architecture/LAN_CHAT_STORAGE.
 - 所有业务 handler 经 dispatcher 注册。
 - v1 全员可聊，不检查好友关系。
 
-服务端业务状态机详细规格独立存放在 `docs/architecture/LAN_CHAT_SERVER_STATE_MACHINE.md`。本节只保留总体职责，register/login/chat E2E 的 session registry、TLV 字段、handler 行为和验收以该文档为准。
+服务端业务状态机详细规格独立存放在 `docs/architecture/LAN_CHAT_SERVER_STATE_MACHINE.md`。Phase 5 应用层 E2E 规格独立存放在 `docs/architecture/LAN_CHAT_APP_E2E.md`。本节只保留总体职责，register/login/chat E2E 的 session registry、TLV 字段、handler 行为和验收以对应文档为准。
 
 ### 4.7 `lan_chat_cpp`
 

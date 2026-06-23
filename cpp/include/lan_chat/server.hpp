@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
 
 #include "lan_chat/result.hpp"
 
@@ -11,6 +12,7 @@ extern "C" {
 namespace lan_chat {
 
 struct ServerConfig {
+    std::string listen_host = "127.0.0.1";
     std::uint16_t listen_port = 7777;
     std::uint32_t worker_thread_count = 4;
     lan_chat_storage_t *storage = nullptr;

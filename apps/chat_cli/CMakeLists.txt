@@ -3,5 +3,6 @@ add_executable(chat_cli
 )
 target_link_libraries(chat_cli
     PRIVATE
-        lan_chat_cpp
+        lan_chat_core_c
+        lan_chat_transport_c
 )

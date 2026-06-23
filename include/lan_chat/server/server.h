@@ -25,6 +25,7 @@ typedef struct lan_chat_server {
 } lan_chat_server_t;
 
 typedef struct lan_chat_server_config {
+    const char *listen_host;
     uint16_t listen_port;
     uint32_t worker_thread_count;
     lan_chat_storage_t *storage;
