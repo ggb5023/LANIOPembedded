@@ -11,6 +11,23 @@ target_link_libraries(lan_chat_skeleton_tests
 
 add_test(NAME lan_chat_skeleton_tests COMMAND lan_chat_skeleton_tests)
 
+if (LAN_CHAT_BUILD_GUI)
+    add_executable(lan_chat_gui_client_tests
+        gui_client_tests.cpp
+    )
+    target_link_libraries(lan_chat_gui_client_tests
+        PRIVATE
+            Qt6::Core
+            chat_gui_core
+            lan_chat_server_c
+            lan_chat_storage_memory_c
+    )
+    add_test(NAME lan_chat_gui_client_tests COMMAND lan_chat_gui_client_tests)
+    set_tests_properties(lan_chat_gui_client_tests PROPERTIES
+        ENVIRONMENT "PATH=$<TARGET_FILE_DIR:Qt6::Core>$<SEMICOLON>$ENV{PATH}"
+    )
+endif()
+
 if (LAN_CHAT_BUILD_APPS AND WIN32)
     add_test(
         NAME lan_chat_app_e2e
