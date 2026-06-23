@@ -64,6 +64,8 @@ lan_chat_mysql_app_e2e
 - verifies online private text
 - verifies online group text fanout
 - verifies online private file relay with size and CRC32 validation
+- verifies focused negative paths: non-member group send, offline file receiver,
+  oversized file, and listen timeout
 - requires `APP_E2E_OK`
 
 The local script default MySQL password is `123456`. It can be overridden with:

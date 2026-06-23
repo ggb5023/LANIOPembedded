@@ -1,4 +1,5 @@
 add_executable(chat_cli
+    cli_support.cpp
     main.cpp
 )
 target_link_libraries(chat_cli

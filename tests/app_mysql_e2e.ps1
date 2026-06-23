@@ -100,6 +100,27 @@ function Run-Client {
     return ($output -join "`n")
 }
 
+function Run-ClientExpectFailure {
+    param([string[]]$ClientArgs, [string]$ExpectedPattern)
+    $oldPreference = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        $output = & $ClientExe @ClientArgs 2>&1
+        $exitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $oldPreference
+    }
+    $output | ForEach-Object { Write-Host $_ }
+    $text = ($output -join "`n")
+    if ($exitCode -eq 0) {
+        throw "chat_cli unexpectedly succeeded: $($ClientArgs -join ' ')"
+    }
+    if ($ExpectedPattern -and $text -notmatch $ExpectedPattern) {
+        throw "chat_cli failure output did not match '$ExpectedPattern': $text"
+    }
+    return $text
+}
+
 function Start-Listen {
     param([string]$Username, [string]$Password, [int]$ExpectCount, [string]$OutputDir = "")
     $clientArgs = @(
@@ -193,16 +214,23 @@ try {
     $alice = "alice_$suffix"
     $bob = "bob_$suffix"
     $carol = "carol_$suffix"
+    $dave = "dave_$suffix"
     $alicePass = "alice-pass-$suffix"
     $bobPass = "bob-pass-$suffix"
     $carolPass = "carol-pass-$suffix"
+    $davePass = "dave-pass-$suffix"
 
     $aliceOut = Run-Client -ClientArgs @("register", "--server", "127.0.0.1:$port", "--username", $alice, "--password", $alicePass, "--nickname", "Alice")
     $bobOut = Run-Client -ClientArgs @("register", "--server", "127.0.0.1:$port", "--username", $bob, "--password", $bobPass, "--nickname", "Bob")
     $carolOut = Run-Client -ClientArgs @("register", "--server", "127.0.0.1:$port", "--username", $carol, "--password", $carolPass, "--nickname", "Carol")
+    $daveOut = Run-Client -ClientArgs @("register", "--server", "127.0.0.1:$port", "--username", $dave, "--password", $davePass, "--nickname", "Dave")
     $aliceId = Extract-Id $aliceOut "user_id"
     $bobId = Extract-Id $bobOut "user_id"
     $carolId = Extract-Id $carolOut "user_id"
+    $daveId = Extract-Id $daveOut "user_id"
+    if ($daveId -eq 0) {
+        throw "invalid dave user id"
+    }
 
     $bobListen = Start-Listen -Username $bob -Password $bobPass -ExpectCount 1
     Start-Sleep -Milliseconds 300
@@ -242,6 +270,14 @@ try {
     if ((Get-Content $sendFile -Raw) -ne (Get-Content $receivedFile.FullName -Raw)) {
         throw "received file content mismatch"
     }
+
+    Run-ClientExpectFailure -ClientArgs @("group-send", "--server", "127.0.0.1:$port", "--username", $dave, "--password", $davePass, "--conversation-id", "$conversationId", "--message", "non-member") -ExpectedPattern "group send failed"
+    Run-ClientExpectFailure -ClientArgs @("send-file", "--server", "127.0.0.1:$port", "--username", $alice, "--password", $alicePass, "--to-user-id", "$carolId", "--path", $sendFile) -ExpectedPattern "file start failed"
+    $oversizeFile = Join-Path $workDir "oversize.bin"
+    $oversizeBytes = New-Object byte[] (1048577)
+    [System.IO.File]::WriteAllBytes($oversizeFile, $oversizeBytes)
+    Run-ClientExpectFailure -ClientArgs @("send-file", "--server", "127.0.0.1:$port", "--username", $alice, "--password", $alicePass, "--to-user-id", "$bobId", "--path", $oversizeFile) -ExpectedPattern "file exceeds limit"
+    Run-ClientExpectFailure -ClientArgs @("listen", "--server", "127.0.0.1:$port", "--username", $bob, "--password", $bobPass, "--expect-count", "1", "--timeout-ms", "200") -ExpectedPattern "timed out|listen expected"
 
     Write-Host "APP_E2E_OK"
 } finally {

@@ -906,6 +906,30 @@ static struct lan_chat_server_file_transfer *find_file_transfer(lan_chat_server_
     return 0;
 }
 
+static int server_user_is_online(lan_chat_server_t *server, lan_chat_user_id_t user_id)
+{
+    if (server == 0 || user_id == 0) {
+        return 0;
+    }
+    return find_client_by_user_id(server, user_id) < server->client_capacity;
+}
+
+static void clear_file_transfers_with_offline_peer(lan_chat_server_t *server)
+{
+    size_t i;
+
+    if (server == 0 || server->file_transfers == 0) {
+        return;
+    }
+    for (i = 0; i < server->file_transfer_capacity; ++i) {
+        if (server->file_transfers[i].active &&
+            (!server_user_is_online(server, server->file_transfers[i].sender_id) ||
+             !server_user_is_online(server, server->file_transfers[i].receiver_id))) {
+            memset(&server->file_transfers[i], 0, sizeof(server->file_transfers[i]));
+        }
+    }
+}
+
 static void close_client(lan_chat_server_t *server, size_t index)
 {
     lan_chat_user_id_t user_id = 0;
@@ -1532,6 +1556,7 @@ lan_chat_status_t lan_chat_server_run_once(lan_chat_server_t *server)
             close_client(server, i);
         }
     }
+    clear_file_transfers_with_offline_peer(server);
     return LAN_CHAT_STATUS_OK;
 }
 

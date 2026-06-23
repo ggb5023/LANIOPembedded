@@ -103,3 +103,40 @@ Phase 6.1 keeps the Phase 6 scope unchanged and hardens the current closure:
 
 These changes do not add offline delivery, ACK, history workflow, group file
 transfer, GUI, friends, audio, or video.
+
+## 7. Phase 6.2 CLI Helper Extraction
+
+Phase 6.2 keeps CLI behavior unchanged and moves reusable protocol/client helper
+logic out of `apps/chat_cli/main.cpp`:
+
+- `main.cpp` owns command parsing, command dispatch, and app-level E2E flow;
+- `cli_support.hpp/.cpp` owns TCP client setup, auth helpers, TLV packet helpers,
+  response/notify parsing, text/group/file request builders, CRC32, and file
+  receive state;
+- the C++ CLI helper layer remains app-local and does not become a public SDK.
+
+This extraction is engineering cleanup only. It does not add a GUI, friends,
+offline delivery, history workflow, ACK, or a new user-facing command.
+
+## 8. Phase 6.3 Negative Path E2E
+
+Phase 6.3 extends the optional MySQL app E2E with focused failure checks:
+
+- non-member `group-send` must fail;
+- `send-file` must fail when the receiver is not online/listening;
+- files larger than 1 MiB must be rejected by the CLI;
+- `listen --expect-count` must fail on timeout.
+
+These negative checks run inside `lan_chat_mysql_app_e2e` when
+`LAN_CHAT_ENABLE_MYSQL_TESTS=ON`. Default no-MySQL CTest remains lightweight.
+
+## 9. Phase 6.4 Server State Cleanup
+
+Phase 6.4 keeps the same Phase 6 feature scope and tightens server runtime state:
+
+- active file transfers are already cleared when a sender or receiver disconnects;
+- each `lan_chat_server_run_once()` pass also sweeps active file transfers and
+  removes any transfer whose sender or receiver is no longer online.
+
+This is a cleanup guard for online relay state only. Heartbeat timeout,
+reconnect/session resume, offline delivery, and retry semantics remain backlog.
