@@ -24,6 +24,16 @@ typedef enum lan_chat_delivery_state {
     LAN_CHAT_DELIVERY_ACKED = 3
 } lan_chat_delivery_state_t;
 
+typedef enum lan_chat_message_content_type {
+    LAN_CHAT_CONTENT_TEXT = 1,
+    LAN_CHAT_CONTENT_FILE = 2
+} lan_chat_message_content_type_t;
+
+typedef enum lan_chat_file_transfer_state {
+    LAN_CHAT_FILE_TRANSFER_STARTED = 1,
+    LAN_CHAT_FILE_TRANSFER_COMPLETED = 2
+} lan_chat_file_transfer_state_t;
+
 typedef struct lan_chat_storage_config {
     lan_chat_storage_kind_t kind;
     const char *host;
@@ -69,6 +79,28 @@ typedef struct lan_chat_message_record {
     uint64_t store_time_ms;
 } lan_chat_message_record_t;
 
+typedef struct lan_chat_group_create {
+    const char *name;
+    lan_chat_user_id_t creator_id;
+    const lan_chat_user_id_t *member_ids;
+    size_t member_count;
+} lan_chat_group_create_t;
+
+typedef struct lan_chat_group_member_record {
+    lan_chat_user_id_t user_id;
+} lan_chat_group_member_record_t;
+
+typedef struct lan_chat_file_transfer_record {
+    uint64_t file_transfer_id;
+    lan_chat_message_id_t message_id;
+    lan_chat_user_id_t sender_id;
+    lan_chat_user_id_t receiver_id;
+    char file_name[LAN_CHAT_MAX_FILE_NAME_LEN + 1];
+    uint64_t file_size;
+    uint32_t crc32;
+    uint16_t transfer_state;
+} lan_chat_file_transfer_record_t;
+
 typedef struct lan_chat_delivery_record {
     lan_chat_delivery_id_t delivery_id;
     lan_chat_message_record_t message;
@@ -99,6 +131,32 @@ typedef struct lan_chat_storage_vtable {
         const lan_chat_message_record_t *message,
         lan_chat_message_id_t *out_message_id,
         lan_chat_delivery_id_t *out_delivery_id);
+    lan_chat_status_t (*create_group)(
+        lan_chat_storage_t *storage,
+        const lan_chat_group_create_t *group,
+        lan_chat_conversation_id_t *out_conversation_id);
+    lan_chat_status_t (*list_group_members)(
+        lan_chat_storage_t *storage,
+        lan_chat_conversation_id_t conversation_id,
+        lan_chat_group_member_record_t *out_members,
+        size_t members_capacity,
+        size_t *out_member_count);
+    lan_chat_status_t (*store_group_message)(
+        lan_chat_storage_t *storage,
+        const lan_chat_message_record_t *message,
+        lan_chat_message_id_t *out_message_id);
+    lan_chat_status_t (*store_file_transfer)(
+        lan_chat_storage_t *storage,
+        const lan_chat_message_record_t *message,
+        const char *file_name,
+        uint64_t file_size,
+        uint32_t crc32,
+        lan_chat_message_id_t *out_message_id,
+        lan_chat_delivery_id_t *out_delivery_id,
+        uint64_t *out_file_transfer_id);
+    lan_chat_status_t (*complete_file_transfer)(
+        lan_chat_storage_t *storage,
+        uint64_t file_transfer_id);
     lan_chat_status_t (*list_history)(
         lan_chat_storage_t *storage,
         lan_chat_user_id_t user_a,
@@ -154,6 +212,37 @@ lan_chat_status_t lan_chat_storage_store_private_message(
     const lan_chat_message_record_t *message,
     lan_chat_message_id_t *out_message_id,
     lan_chat_delivery_id_t *out_delivery_id);
+
+lan_chat_status_t lan_chat_storage_create_group(
+    lan_chat_storage_t *storage,
+    const lan_chat_group_create_t *group,
+    lan_chat_conversation_id_t *out_conversation_id);
+
+lan_chat_status_t lan_chat_storage_list_group_members(
+    lan_chat_storage_t *storage,
+    lan_chat_conversation_id_t conversation_id,
+    lan_chat_group_member_record_t *out_members,
+    size_t members_capacity,
+    size_t *out_member_count);
+
+lan_chat_status_t lan_chat_storage_store_group_message(
+    lan_chat_storage_t *storage,
+    const lan_chat_message_record_t *message,
+    lan_chat_message_id_t *out_message_id);
+
+lan_chat_status_t lan_chat_storage_store_file_transfer(
+    lan_chat_storage_t *storage,
+    const lan_chat_message_record_t *message,
+    const char *file_name,
+    uint64_t file_size,
+    uint32_t crc32,
+    lan_chat_message_id_t *out_message_id,
+    lan_chat_delivery_id_t *out_delivery_id,
+    uint64_t *out_file_transfer_id);
+
+lan_chat_status_t lan_chat_storage_complete_file_transfer(
+    lan_chat_storage_t *storage,
+    uint64_t file_transfer_id);
 
 lan_chat_status_t lan_chat_storage_list_history(
     lan_chat_storage_t *storage,

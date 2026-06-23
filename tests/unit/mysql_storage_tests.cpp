@@ -3,6 +3,7 @@
 #include <ctime>
 #include <iostream>
 #include <string>
+#include <vector>
 
 #include "lan_chat/storage/mysql_storage.h"
 
@@ -70,7 +71,7 @@ void run_storage_contract(lan_chat_storage_t *storage)
     lan_chat_user_id_t duplicate_id = 0;
     lan_chat_account_create_t duplicate{};
     lan_chat_login_record_t login{};
-    lan_chat_user_record_t users[8]{};
+    std::vector<lan_chat_user_record_t> users;
     lan_chat_message_record_t message{};
     lan_chat_message_record_t history[3]{};
     lan_chat_delivery_record_t deliveries[3]{};
@@ -92,8 +93,10 @@ void run_storage_contract(lan_chat_storage_t *storage)
     require_status(lan_chat_storage_get_login_record(storage, alice.c_str(), &login), LAN_CHAT_STATUS_OK, "login record");
     require_true(login.user_id == alice_id, "login user_id mismatch");
     require_true(std::strcmp(login.password_hash, "hash-alice") == 0, "login hash mismatch");
-    require_status(lan_chat_storage_list_users(storage, users, 8, &count), LAN_CHAT_STATUS_OK, "list users");
+    require_status(lan_chat_storage_list_users(storage, nullptr, 0, &count), LAN_CHAT_STATUS_BUFFER_TOO_SMALL, "list users count");
     require_true(count >= 2, "list users count too small");
+    users.resize(count);
+    require_status(lan_chat_storage_list_users(storage, users.data(), users.size(), &count), LAN_CHAT_STATUS_OK, "list users");
 
     message.sender_id = alice_id;
     message.receiver_id = bob_id;

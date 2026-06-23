@@ -7,7 +7,9 @@ enum {
     LAN_CHAT_MEMORY_MAX_ACCOUNTS = 128,
     LAN_CHAT_MEMORY_MAX_CONVERSATIONS = 256,
     LAN_CHAT_MEMORY_MAX_MESSAGES = 1024,
-    LAN_CHAT_MEMORY_MAX_DELIVERIES = 1024
+    LAN_CHAT_MEMORY_MAX_DELIVERIES = 1024,
+    LAN_CHAT_MEMORY_MAX_MEMBERS = 1024,
+    LAN_CHAT_MEMORY_MAX_FILES = 128
 };
 
 typedef struct lan_chat_memory_account {
@@ -22,9 +24,17 @@ typedef struct lan_chat_memory_account {
 
 typedef struct lan_chat_memory_conversation {
     lan_chat_conversation_id_t conversation_id;
+    uint8_t is_group;
+    char name[LAN_CHAT_MAX_GROUP_NAME_LEN + 1];
     lan_chat_user_id_t user_a;
     lan_chat_user_id_t user_b;
 } lan_chat_memory_conversation_t;
+
+typedef struct lan_chat_memory_member {
+    lan_chat_conversation_id_t conversation_id;
+    lan_chat_user_id_t user_id;
+    uint8_t active;
+} lan_chat_memory_member_t;
 
 typedef struct lan_chat_memory_delivery {
     lan_chat_delivery_id_t delivery_id;
@@ -34,6 +44,10 @@ typedef struct lan_chat_memory_delivery {
     uint64_t delivered_time_ms;
     uint64_t acked_time_ms;
 } lan_chat_memory_delivery_t;
+
+typedef struct lan_chat_memory_file {
+    lan_chat_file_transfer_record_t record;
+} lan_chat_memory_file_t;
 
 typedef struct lan_chat_memory_storage {
     lan_chat_storage_t base;
@@ -45,10 +59,15 @@ typedef struct lan_chat_memory_storage {
     size_t account_count;
     lan_chat_memory_conversation_t conversations[LAN_CHAT_MEMORY_MAX_CONVERSATIONS];
     size_t conversation_count;
+    lan_chat_memory_member_t members[LAN_CHAT_MEMORY_MAX_MEMBERS];
+    size_t member_count;
     lan_chat_message_record_t messages[LAN_CHAT_MEMORY_MAX_MESSAGES];
     size_t message_count;
     lan_chat_memory_delivery_t deliveries[LAN_CHAT_MEMORY_MAX_DELIVERIES];
     size_t delivery_count;
+    lan_chat_memory_file_t files[LAN_CHAT_MEMORY_MAX_FILES];
+    size_t file_count;
+    uint64_t next_file_transfer_id;
 } lan_chat_memory_storage_t;
 
 static size_t bounded_strlen(const char *value, size_t max_len)
@@ -195,6 +214,7 @@ static lan_chat_status_t get_or_create_private_conversation(
     normalize_pair(user_a, user_b, &low, &high);
     conversation = &memory->conversations[memory->conversation_count++];
     conversation->conversation_id = memory->next_conversation_id++;
+    conversation->is_group = 0;
     conversation->user_a = low;
     conversation->user_b = high;
     *out_conversation_id = conversation->conversation_id;
@@ -211,6 +231,35 @@ static int conversation_has_members(
 
     normalize_pair(user_a, user_b, &low, &high);
     return conversation != 0 && conversation->user_a == low && conversation->user_b == high;
+}
+
+static int group_has_member(
+    lan_chat_memory_storage_t *memory,
+    lan_chat_conversation_id_t conversation_id,
+    lan_chat_user_id_t user_id)
+{
+    size_t i;
+
+    for (i = 0; i < memory->member_count; ++i) {
+        if (memory->members[i].conversation_id == conversation_id &&
+            memory->members[i].user_id == user_id &&
+            memory->members[i].active != 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int member_seen(const lan_chat_user_id_t *ids, size_t count, lan_chat_user_id_t user_id)
+{
+    size_t i;
+
+    for (i = 0; i < count; ++i) {
+        if (ids[i] == user_id) {
+            return 1;
+        }
+    }
+    return 0;
 }
 
 static lan_chat_message_record_t *find_message_by_id(
@@ -456,6 +505,192 @@ static lan_chat_status_t memory_store_private_message(
     return LAN_CHAT_STATUS_OK;
 }
 
+static lan_chat_status_t memory_create_group(
+    lan_chat_storage_t *storage,
+    const lan_chat_group_create_t *group,
+    lan_chat_conversation_id_t *out_conversation_id)
+{
+    lan_chat_memory_storage_t *memory = (lan_chat_memory_storage_t *)storage;
+    lan_chat_memory_conversation_t *conversation;
+    lan_chat_user_id_t unique_members[LAN_CHAT_MAX_GROUP_MEMBERS];
+    size_t unique_count = 0;
+    size_t i;
+
+    if (memory == 0 || group == 0 || out_conversation_id == 0 ||
+        group->creator_id == 0 || group->member_ids == 0 || group->member_count == 0 ||
+        group->member_count > LAN_CHAT_MAX_GROUP_MEMBERS ||
+        !string_is_valid(group->name, LAN_CHAT_MAX_GROUP_NAME_LEN, 0)) {
+        return LAN_CHAT_STATUS_INVALID_ARGUMENT;
+    }
+    *out_conversation_id = 0;
+    if (!account_is_enabled(memory, group->creator_id)) {
+        return LAN_CHAT_STATUS_NOT_FOUND;
+    }
+    unique_members[unique_count++] = group->creator_id;
+    for (i = 0; i < group->member_count; ++i) {
+        if (group->member_ids[i] == 0 || !account_is_enabled(memory, group->member_ids[i])) {
+            return LAN_CHAT_STATUS_NOT_FOUND;
+        }
+        if (!member_seen(unique_members, unique_count, group->member_ids[i])) {
+            if (unique_count >= LAN_CHAT_MAX_GROUP_MEMBERS) {
+                return LAN_CHAT_STATUS_BUFFER_TOO_SMALL;
+            }
+            unique_members[unique_count++] = group->member_ids[i];
+        }
+    }
+    if (unique_count < 2) {
+        return LAN_CHAT_STATUS_INVALID_ARGUMENT;
+    }
+    if (memory->conversation_count >= LAN_CHAT_MEMORY_MAX_CONVERSATIONS ||
+        memory->member_count + unique_count > LAN_CHAT_MEMORY_MAX_MEMBERS) {
+        return LAN_CHAT_STATUS_BUFFER_TOO_SMALL;
+    }
+
+    conversation = &memory->conversations[memory->conversation_count++];
+    memset(conversation, 0, sizeof(*conversation));
+    conversation->conversation_id = memory->next_conversation_id++;
+    conversation->is_group = 1;
+    copy_string(conversation->name, sizeof(conversation->name), group->name);
+    for (i = 0; i < unique_count; ++i) {
+        memory->members[memory->member_count].conversation_id = conversation->conversation_id;
+        memory->members[memory->member_count].user_id = unique_members[i];
+        memory->members[memory->member_count].active = 1;
+        ++memory->member_count;
+    }
+    *out_conversation_id = conversation->conversation_id;
+    return LAN_CHAT_STATUS_OK;
+}
+
+static lan_chat_status_t memory_list_group_members(
+    lan_chat_storage_t *storage,
+    lan_chat_conversation_id_t conversation_id,
+    lan_chat_group_member_record_t *out_members,
+    size_t members_capacity,
+    size_t *out_member_count)
+{
+    lan_chat_memory_storage_t *memory = (lan_chat_memory_storage_t *)storage;
+    lan_chat_memory_conversation_t *conversation;
+    size_t i;
+    size_t count = 0;
+
+    if (memory == 0 || conversation_id == 0 || out_member_count == 0 ||
+        (out_members == 0 && members_capacity > 0)) {
+        return LAN_CHAT_STATUS_INVALID_ARGUMENT;
+    }
+    conversation = find_conversation_by_id(memory, conversation_id);
+    if (conversation == 0 || !conversation->is_group) {
+        return LAN_CHAT_STATUS_NOT_FOUND;
+    }
+    for (i = 0; i < memory->member_count; ++i) {
+        if (memory->members[i].conversation_id == conversation_id && memory->members[i].active != 0) {
+            if (count < members_capacity) {
+                out_members[count].user_id = memory->members[i].user_id;
+            }
+            ++count;
+        }
+    }
+    *out_member_count = count;
+    return count > members_capacity ? LAN_CHAT_STATUS_BUFFER_TOO_SMALL : LAN_CHAT_STATUS_OK;
+}
+
+static lan_chat_status_t memory_store_group_message(
+    lan_chat_storage_t *storage,
+    const lan_chat_message_record_t *message,
+    lan_chat_message_id_t *out_message_id)
+{
+    lan_chat_memory_storage_t *memory = (lan_chat_memory_storage_t *)storage;
+    lan_chat_memory_conversation_t *conversation;
+    lan_chat_message_record_t *stored_message;
+
+    if (memory == 0 || message == 0 || out_message_id == 0) {
+        return LAN_CHAT_STATUS_INVALID_ARGUMENT;
+    }
+    *out_message_id = 0;
+    if (message->conversation_id == 0 || message->sender_id == 0 || message->content_type == 0 ||
+        !string_is_valid(message->content, LAN_CHAT_MAX_MESSAGE_TEXT_LEN, 0)) {
+        return LAN_CHAT_STATUS_INVALID_ARGUMENT;
+    }
+    conversation = find_conversation_by_id(memory, message->conversation_id);
+    if (conversation == 0 || !conversation->is_group || !group_has_member(memory, message->conversation_id, message->sender_id)) {
+        return LAN_CHAT_STATUS_NOT_FOUND;
+    }
+    if (memory->message_count >= LAN_CHAT_MEMORY_MAX_MESSAGES) {
+        return LAN_CHAT_STATUS_BUFFER_TOO_SMALL;
+    }
+
+    stored_message = &memory->messages[memory->message_count++];
+    *stored_message = *message;
+    stored_message->message_id = memory->next_message_id++;
+    stored_message->receiver_id = 0;
+    if (stored_message->store_time_ms == 0) {
+        stored_message->store_time_ms = stored_message->send_time_ms;
+    }
+    *out_message_id = stored_message->message_id;
+    return LAN_CHAT_STATUS_OK;
+}
+
+static lan_chat_status_t memory_store_file_transfer(
+    lan_chat_storage_t *storage,
+    const lan_chat_message_record_t *message,
+    const char *file_name,
+    uint64_t file_size,
+    uint32_t crc32,
+    lan_chat_message_id_t *out_message_id,
+    lan_chat_delivery_id_t *out_delivery_id,
+    uint64_t *out_file_transfer_id)
+{
+    lan_chat_memory_storage_t *memory = (lan_chat_memory_storage_t *)storage;
+    lan_chat_message_record_t file_message;
+    lan_chat_status_t status;
+
+    if (memory == 0 || message == 0 || file_name == 0 || out_message_id == 0 ||
+        out_delivery_id == 0 || out_file_transfer_id == 0 ||
+        file_size == 0 || file_size > LAN_CHAT_MAX_FILE_SIZE ||
+        !string_is_valid(file_name, LAN_CHAT_MAX_FILE_NAME_LEN, 0)) {
+        return LAN_CHAT_STATUS_INVALID_ARGUMENT;
+    }
+    if (memory->file_count >= LAN_CHAT_MEMORY_MAX_FILES) {
+        return LAN_CHAT_STATUS_BUFFER_TOO_SMALL;
+    }
+
+    file_message = *message;
+    file_message.content_type = LAN_CHAT_CONTENT_FILE;
+    status = memory_store_private_message(storage, &file_message, out_message_id, out_delivery_id);
+    if (status != LAN_CHAT_STATUS_OK) {
+        return status;
+    }
+    memory->files[memory->file_count].record.file_transfer_id = memory->next_file_transfer_id++;
+    memory->files[memory->file_count].record.message_id = *out_message_id;
+    memory->files[memory->file_count].record.sender_id = message->sender_id;
+    memory->files[memory->file_count].record.receiver_id = message->receiver_id;
+    copy_string(memory->files[memory->file_count].record.file_name, sizeof(memory->files[memory->file_count].record.file_name), file_name);
+    memory->files[memory->file_count].record.file_size = file_size;
+    memory->files[memory->file_count].record.crc32 = crc32;
+    memory->files[memory->file_count].record.transfer_state = LAN_CHAT_FILE_TRANSFER_STARTED;
+    *out_file_transfer_id = memory->files[memory->file_count].record.file_transfer_id;
+    ++memory->file_count;
+    return LAN_CHAT_STATUS_OK;
+}
+
+static lan_chat_status_t memory_complete_file_transfer(
+    lan_chat_storage_t *storage,
+    uint64_t file_transfer_id)
+{
+    lan_chat_memory_storage_t *memory = (lan_chat_memory_storage_t *)storage;
+    size_t i;
+
+    if (memory == 0 || file_transfer_id == 0) {
+        return LAN_CHAT_STATUS_INVALID_ARGUMENT;
+    }
+    for (i = 0; i < memory->file_count; ++i) {
+        if (memory->files[i].record.file_transfer_id == file_transfer_id) {
+            memory->files[i].record.transfer_state = LAN_CHAT_FILE_TRANSFER_COMPLETED;
+            return LAN_CHAT_STATUS_OK;
+        }
+    }
+    return LAN_CHAT_STATUS_NOT_FOUND;
+}
+
 static lan_chat_status_t memory_list_history(
     lan_chat_storage_t *storage,
     lan_chat_user_id_t user_a,
@@ -615,6 +850,11 @@ static const lan_chat_storage_vtable_t k_memory_vtable = {
     memory_update_last_login,
     memory_list_users,
     memory_store_private_message,
+    memory_create_group,
+    memory_list_group_members,
+    memory_store_group_message,
+    memory_store_file_transfer,
+    memory_complete_file_transfer,
     memory_list_history,
     memory_list_pending_deliveries,
     memory_mark_delivery_state
@@ -639,6 +879,7 @@ lan_chat_status_t lan_chat_storage_memory_open(lan_chat_storage_t **out_storage)
     memory->next_conversation_id = 1;
     memory->next_message_id = 1;
     memory->next_delivery_id = 1;
+    memory->next_file_transfer_id = 1;
     *out_storage = &memory->base;
     return LAN_CHAT_STATUS_OK;
 }

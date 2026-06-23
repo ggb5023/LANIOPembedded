@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS `accounts` (
 CREATE TABLE IF NOT EXISTS `conversations` (
     `conversation_id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     `conversation_type` VARCHAR(16) NOT NULL DEFAULT 'private',
+    `conversation_name` VARCHAR(64) NULL,
     `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     PRIMARY KEY (`conversation_id`)
@@ -47,7 +48,7 @@ CREATE TABLE IF NOT EXISTS `messages` (
     `message_id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     `conversation_id` BIGINT UNSIGNED NOT NULL,
     `sender_id` BIGINT UNSIGNED NOT NULL,
-    `receiver_id` BIGINT UNSIGNED NOT NULL,
+    `receiver_id` BIGINT UNSIGNED NULL,
     `content_type` SMALLINT UNSIGNED NOT NULL DEFAULT 1,
     `content` TEXT NOT NULL,
     `client_message_id` BIGINT UNSIGNED NOT NULL DEFAULT 0,
@@ -87,4 +88,30 @@ CREATE TABLE IF NOT EXISTS `message_deliveries` (
         ON UPDATE CASCADE ON DELETE RESTRICT,
     CONSTRAINT `ck_message_deliveries_state`
         CHECK (`delivery_state` IN ('pending', 'delivered', 'acked'))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `file_transfers` (
+    `file_transfer_id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    `message_id` BIGINT UNSIGNED NOT NULL,
+    `sender_id` BIGINT UNSIGNED NOT NULL,
+    `receiver_id` BIGINT UNSIGNED NOT NULL,
+    `file_name` VARCHAR(255) NOT NULL,
+    `file_size` BIGINT UNSIGNED NOT NULL,
+    `crc32` INT UNSIGNED NOT NULL,
+    `transfer_state` VARCHAR(16) NOT NULL DEFAULT 'started',
+    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `completed_at` DATETIME NULL,
+    PRIMARY KEY (`file_transfer_id`),
+    KEY `idx_file_transfers_message` (`message_id`),
+    CONSTRAINT `fk_file_transfers_message`
+        FOREIGN KEY (`message_id`) REFERENCES `messages` (`message_id`)
+        ON UPDATE CASCADE ON DELETE RESTRICT,
+    CONSTRAINT `fk_file_transfers_sender`
+        FOREIGN KEY (`sender_id`) REFERENCES `accounts` (`user_id`)
+        ON UPDATE CASCADE ON DELETE RESTRICT,
+    CONSTRAINT `fk_file_transfers_receiver`
+        FOREIGN KEY (`receiver_id`) REFERENCES `accounts` (`user_id`)
+        ON UPDATE CASCADE ON DELETE RESTRICT,
+    CONSTRAINT `ck_file_transfers_state`
+        CHECK (`transfer_state` IN ('started', 'completed'))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

@@ -98,6 +98,14 @@ static void bind_u16(MYSQL_BIND *bind, uint16_t *value)
     bind->is_unsigned = true;
 }
 
+static void bind_u32(MYSQL_BIND *bind, uint32_t *value)
+{
+    memset(bind, 0, sizeof(*bind));
+    bind->buffer_type = MYSQL_TYPE_LONG;
+    bind->buffer = value;
+    bind->is_unsigned = true;
+}
+
 static void bind_string(MYSQL_BIND *bind, const char *value, unsigned long *length)
 {
     memset(bind, 0, sizeof(*bind));
@@ -279,6 +287,26 @@ static lan_chat_status_t insert_conversation(MYSQL *mysql, lan_chat_conversation
     return LAN_CHAT_STATUS_OK;
 }
 
+static lan_chat_status_t insert_group_conversation(
+    MYSQL *mysql,
+    const char *name,
+    lan_chat_conversation_id_t *out_conversation_id)
+{
+    MYSQL_BIND params[1];
+    unsigned long name_len = (unsigned long)bounded_strlen(name, LAN_CHAT_MAX_GROUP_NAME_LEN);
+    lan_chat_status_t status;
+    const char *sql =
+        "INSERT INTO conversations (conversation_type, conversation_name) VALUES ('group', ?)";
+
+    bind_string(&params[0], name, &name_len);
+    status = execute_statement(mysql, sql, params);
+    if (status != LAN_CHAT_STATUS_OK) {
+        return status;
+    }
+    *out_conversation_id = mysql_insert_id(mysql);
+    return LAN_CHAT_STATUS_OK;
+}
+
 static lan_chat_status_t ensure_conversation_member(
     MYSQL *mysql,
     lan_chat_conversation_id_t conversation_id,
@@ -322,6 +350,34 @@ static lan_chat_status_t validate_conversation_members(
         return status;
     }
     return found && member_count == 2 ? LAN_CHAT_STATUS_OK : LAN_CHAT_STATUS_NOT_FOUND;
+}
+
+static lan_chat_status_t validate_group_member(
+    MYSQL *mysql,
+    lan_chat_conversation_id_t conversation_id,
+    lan_chat_user_id_t user_id)
+{
+    MYSQL_BIND params[2];
+    uint64_t cid = conversation_id;
+    uint64_t uid = user_id;
+    uint64_t found_id = 0;
+    int found = 0;
+    lan_chat_status_t status;
+    const char *sql =
+        "SELECT cm.user_id "
+        "FROM conversation_members cm "
+        "JOIN conversations c ON c.conversation_id = cm.conversation_id "
+        "WHERE cm.conversation_id = ? AND cm.user_id = ? "
+        "AND cm.active = 1 AND c.conversation_type = 'group' "
+        "LIMIT 1";
+
+    bind_u64(&params[0], &cid);
+    bind_u64(&params[1], &uid);
+    status = mysql_scalar_u64(mysql, sql, params, &found_id, &found);
+    if (status != LAN_CHAT_STATUS_OK) {
+        return status;
+    }
+    return found ? LAN_CHAT_STATUS_OK : LAN_CHAT_STATUS_NOT_FOUND;
 }
 
 static lan_chat_status_t get_or_create_conversation(
@@ -390,6 +446,38 @@ static lan_chat_status_t insert_message(
     bind_u64(&params[5], &client_message_id);
     bind_u64(&params[6], &send_time_ms);
 
+    status = execute_statement(storage->mysql, sql, params);
+    if (status != LAN_CHAT_STATUS_OK) {
+        return status;
+    }
+    *out_message_id = mysql_insert_id(storage->mysql);
+    return LAN_CHAT_STATUS_OK;
+}
+
+static lan_chat_status_t insert_group_message(
+    lan_chat_mysql_storage_t *storage,
+    const lan_chat_message_record_t *message,
+    lan_chat_message_id_t *out_message_id)
+{
+    MYSQL_BIND params[6];
+    uint64_t cid = message->conversation_id;
+    uint64_t sender_id = message->sender_id;
+    uint16_t content_type = message->content_type;
+    unsigned long content_len = (unsigned long)bounded_strlen(message->content, LAN_CHAT_MAX_MESSAGE_TEXT_LEN);
+    uint64_t client_message_id = message->client_message_id;
+    uint64_t send_time_ms = message->send_time_ms;
+    lan_chat_status_t status;
+    const char *sql =
+        "INSERT INTO messages "
+        "(conversation_id, sender_id, receiver_id, content_type, content, client_message_id, send_time) "
+        "VALUES (?, ?, NULL, ?, ?, ?, FROM_UNIXTIME(? / 1000.0))";
+
+    bind_u64(&params[0], &cid);
+    bind_u64(&params[1], &sender_id);
+    bind_u16(&params[2], &content_type);
+    bind_string(&params[3], message->content, &content_len);
+    bind_u64(&params[4], &client_message_id);
+    bind_u64(&params[5], &send_time_ms);
     status = execute_statement(storage->mysql, sql, params);
     if (status != LAN_CHAT_STATUS_OK) {
         return status;
@@ -739,6 +827,302 @@ static lan_chat_status_t mysql_store_private_message(
 #endif
 }
 
+static int mysql_member_seen(const lan_chat_user_id_t *ids, size_t count, lan_chat_user_id_t user_id)
+{
+    size_t i;
+
+    for (i = 0; i < count; ++i) {
+        if (ids[i] == user_id) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static lan_chat_status_t mysql_create_group(
+    lan_chat_storage_t *storage,
+    const lan_chat_group_create_t *group,
+    lan_chat_conversation_id_t *out_conversation_id)
+{
+#if LAN_CHAT_HAS_MYSQL
+    lan_chat_mysql_storage_t *mysql_storage = (lan_chat_mysql_storage_t *)storage;
+    lan_chat_user_id_t unique_members[LAN_CHAT_MAX_GROUP_MEMBERS];
+    size_t unique_count = 0;
+    size_t i;
+    lan_chat_status_t status;
+
+    if (mysql_storage == 0 || group == 0 || out_conversation_id == 0 ||
+        group->creator_id == 0 || group->member_ids == 0 || group->member_count == 0 ||
+        group->member_count > LAN_CHAT_MAX_GROUP_MEMBERS ||
+        !string_is_valid(group->name, LAN_CHAT_MAX_GROUP_NAME_LEN, 0)) {
+        return LAN_CHAT_STATUS_INVALID_ARGUMENT;
+    }
+    *out_conversation_id = 0;
+    status = ensure_user_enabled(mysql_storage->mysql, group->creator_id);
+    if (status != LAN_CHAT_STATUS_OK) {
+        return status;
+    }
+    unique_members[unique_count++] = group->creator_id;
+    for (i = 0; i < group->member_count; ++i) {
+        if (group->member_ids[i] == 0) {
+            return LAN_CHAT_STATUS_INVALID_ARGUMENT;
+        }
+        status = ensure_user_enabled(mysql_storage->mysql, group->member_ids[i]);
+        if (status != LAN_CHAT_STATUS_OK) {
+            return status;
+        }
+        if (!mysql_member_seen(unique_members, unique_count, group->member_ids[i])) {
+            if (unique_count >= LAN_CHAT_MAX_GROUP_MEMBERS) {
+                return LAN_CHAT_STATUS_BUFFER_TOO_SMALL;
+            }
+            unique_members[unique_count++] = group->member_ids[i];
+        }
+    }
+    if (unique_count < 2) {
+        return LAN_CHAT_STATUS_INVALID_ARGUMENT;
+    }
+
+    status = begin_transaction(mysql_storage);
+    if (status != LAN_CHAT_STATUS_OK) {
+        return status;
+    }
+    status = insert_group_conversation(mysql_storage->mysql, group->name, out_conversation_id);
+    for (i = 0; status == LAN_CHAT_STATUS_OK && i < unique_count; ++i) {
+        status = ensure_conversation_member(mysql_storage->mysql, *out_conversation_id, unique_members[i]);
+    }
+    if (status != LAN_CHAT_STATUS_OK) {
+        rollback_transaction(mysql_storage);
+        *out_conversation_id = 0;
+        return status;
+    }
+    status = commit_transaction(mysql_storage);
+    if (status != LAN_CHAT_STATUS_OK) {
+        rollback_transaction(mysql_storage);
+        *out_conversation_id = 0;
+    }
+    return status;
+#else
+    (void)storage;
+    (void)group;
+    (void)out_conversation_id;
+    return mysql_not_implemented();
+#endif
+}
+
+static lan_chat_status_t mysql_list_group_members(
+    lan_chat_storage_t *storage,
+    lan_chat_conversation_id_t conversation_id,
+    lan_chat_group_member_record_t *out_members,
+    size_t members_capacity,
+    size_t *out_member_count)
+{
+#if LAN_CHAT_HAS_MYSQL
+    lan_chat_mysql_storage_t *mysql_storage = (lan_chat_mysql_storage_t *)storage;
+    MYSQL_STMT *stmt;
+    MYSQL_BIND params[1];
+    MYSQL_BIND result[1];
+    uint64_t cid = conversation_id;
+    lan_chat_group_member_record_t row;
+    bool is_null = false;
+    int fetch_result;
+    size_t count = 0;
+    lan_chat_status_t status = LAN_CHAT_STATUS_OK;
+    const char *sql =
+        "SELECT cm.user_id "
+        "FROM conversation_members cm "
+        "JOIN conversations c ON c.conversation_id = cm.conversation_id "
+        "WHERE cm.conversation_id = ? AND cm.active = 1 AND c.conversation_type = 'group' "
+        "ORDER BY cm.user_id ASC";
+
+    if (mysql_storage == 0 || conversation_id == 0 || out_member_count == 0 ||
+        (out_members == 0 && members_capacity > 0)) {
+        return LAN_CHAT_STATUS_INVALID_ARGUMENT;
+    }
+    *out_member_count = 0;
+    stmt = mysql_stmt_init(mysql_storage->mysql);
+    if (stmt == 0) {
+        return LAN_CHAT_STATUS_OUT_OF_MEMORY;
+    }
+    bind_u64(&params[0], &cid);
+    memset(&row, 0, sizeof(row));
+    bind_u64(&result[0], &row.user_id);
+    result[0].is_null = &is_null;
+    if (mysql_stmt_prepare(stmt, sql, (unsigned long)strlen(sql)) != 0 ||
+        mysql_stmt_bind_param(stmt, params) != 0 ||
+        mysql_stmt_bind_result(stmt, result) != 0 ||
+        mysql_stmt_execute(stmt) != 0) {
+        status = stmt_status(stmt);
+        mysql_stmt_close(stmt);
+        return status;
+    }
+    while ((fetch_result = mysql_stmt_fetch(stmt)) == 0 || fetch_result == MYSQL_DATA_TRUNCATED) {
+        if (count < members_capacity) {
+            out_members[count] = row;
+        }
+        ++count;
+        memset(&row, 0, sizeof(row));
+    }
+    status = fetch_result == MYSQL_NO_DATA ? LAN_CHAT_STATUS_OK : stmt_status(stmt);
+    mysql_stmt_close(stmt);
+    *out_member_count = count;
+    if (status != LAN_CHAT_STATUS_OK) {
+        return status;
+    }
+    if (count == 0) {
+        return LAN_CHAT_STATUS_NOT_FOUND;
+    }
+    return count > members_capacity ? LAN_CHAT_STATUS_BUFFER_TOO_SMALL : LAN_CHAT_STATUS_OK;
+#else
+    (void)storage;
+    (void)conversation_id;
+    (void)out_members;
+    (void)members_capacity;
+    (void)out_member_count;
+    return mysql_not_implemented();
+#endif
+}
+
+static lan_chat_status_t mysql_store_group_message(
+    lan_chat_storage_t *storage,
+    const lan_chat_message_record_t *message,
+    lan_chat_message_id_t *out_message_id)
+{
+#if LAN_CHAT_HAS_MYSQL
+    lan_chat_mysql_storage_t *mysql_storage = (lan_chat_mysql_storage_t *)storage;
+    lan_chat_status_t status;
+
+    if (mysql_storage == 0 || message == 0 || out_message_id == 0) {
+        return LAN_CHAT_STATUS_INVALID_ARGUMENT;
+    }
+    *out_message_id = 0;
+    if (message->conversation_id == 0 || message->sender_id == 0 || message->content_type == 0 ||
+        !string_is_valid(message->content, LAN_CHAT_MAX_MESSAGE_TEXT_LEN, 0)) {
+        return LAN_CHAT_STATUS_INVALID_ARGUMENT;
+    }
+    status = validate_group_member(mysql_storage->mysql, message->conversation_id, message->sender_id);
+    if (status != LAN_CHAT_STATUS_OK) {
+        return status;
+    }
+    return insert_group_message(mysql_storage, message, out_message_id);
+#else
+    (void)storage;
+    (void)message;
+    (void)out_message_id;
+    return mysql_not_implemented();
+#endif
+}
+
+static lan_chat_status_t mysql_store_file_transfer(
+    lan_chat_storage_t *storage,
+    const lan_chat_message_record_t *message,
+    const char *file_name,
+    uint64_t file_size,
+    uint32_t crc32,
+    lan_chat_message_id_t *out_message_id,
+    lan_chat_delivery_id_t *out_delivery_id,
+    uint64_t *out_file_transfer_id)
+{
+#if LAN_CHAT_HAS_MYSQL
+    lan_chat_mysql_storage_t *mysql_storage = (lan_chat_mysql_storage_t *)storage;
+    lan_chat_message_record_t file_message;
+    MYSQL_BIND params[6];
+    uint64_t mid;
+    uint64_t sid;
+    uint64_t rid;
+    unsigned long file_name_len;
+    uint64_t fsize = file_size;
+    uint32_t fcrc = crc32;
+    lan_chat_status_t status;
+    const char *sql =
+        "INSERT INTO file_transfers "
+        "(message_id, sender_id, receiver_id, file_name, file_size, crc32, transfer_state) "
+        "VALUES (?, ?, ?, ?, ?, ?, 'started')";
+
+    if (mysql_storage == 0 || message == 0 || file_name == 0 || out_message_id == 0 ||
+        out_delivery_id == 0 || out_file_transfer_id == 0 ||
+        file_size == 0 || file_size > LAN_CHAT_MAX_FILE_SIZE ||
+        !string_is_valid(file_name, LAN_CHAT_MAX_FILE_NAME_LEN, 0)) {
+        return LAN_CHAT_STATUS_INVALID_ARGUMENT;
+    }
+    *out_message_id = 0;
+    *out_delivery_id = 0;
+    *out_file_transfer_id = 0;
+    file_message = *message;
+    file_message.content_type = LAN_CHAT_CONTENT_FILE;
+
+    status = begin_transaction(mysql_storage);
+    if (status != LAN_CHAT_STATUS_OK) {
+        return status;
+    }
+    status = get_or_create_conversation(mysql_storage, &file_message, &file_message.conversation_id);
+    if (status == LAN_CHAT_STATUS_OK) {
+        status = insert_message(mysql_storage, &file_message, file_message.conversation_id, out_message_id);
+    }
+    if (status == LAN_CHAT_STATUS_OK) {
+        status = insert_delivery(mysql_storage, *out_message_id, file_message.receiver_id, out_delivery_id);
+    }
+    if (status == LAN_CHAT_STATUS_OK) {
+        mid = *out_message_id;
+        sid = file_message.sender_id;
+        rid = file_message.receiver_id;
+        file_name_len = (unsigned long)bounded_strlen(file_name, LAN_CHAT_MAX_FILE_NAME_LEN);
+        bind_u64(&params[0], &mid);
+        bind_u64(&params[1], &sid);
+        bind_u64(&params[2], &rid);
+        bind_string(&params[3], file_name, &file_name_len);
+        bind_u64(&params[4], &fsize);
+        bind_u32(&params[5], &fcrc);
+        status = execute_statement(mysql_storage->mysql, sql, params);
+    }
+    if (status == LAN_CHAT_STATUS_OK) {
+        *out_file_transfer_id = mysql_insert_id(mysql_storage->mysql);
+        status = commit_transaction(mysql_storage);
+    }
+    if (status != LAN_CHAT_STATUS_OK) {
+        rollback_transaction(mysql_storage);
+        *out_message_id = 0;
+        *out_delivery_id = 0;
+        *out_file_transfer_id = 0;
+    }
+    return status;
+#else
+    (void)storage;
+    (void)message;
+    (void)file_name;
+    (void)file_size;
+    (void)crc32;
+    (void)out_message_id;
+    (void)out_delivery_id;
+    (void)out_file_transfer_id;
+    return mysql_not_implemented();
+#endif
+}
+
+static lan_chat_status_t mysql_complete_file_transfer(
+    lan_chat_storage_t *storage,
+    uint64_t file_transfer_id)
+{
+#if LAN_CHAT_HAS_MYSQL
+    lan_chat_mysql_storage_t *mysql_storage = (lan_chat_mysql_storage_t *)storage;
+    MYSQL_BIND params[1];
+    uint64_t fid = file_transfer_id;
+    const char *sql =
+        "UPDATE file_transfers "
+        "SET transfer_state = 'completed', completed_at = CURRENT_TIMESTAMP "
+        "WHERE file_transfer_id = ?";
+
+    if (mysql_storage == 0 || file_transfer_id == 0) {
+        return LAN_CHAT_STATUS_INVALID_ARGUMENT;
+    }
+    bind_u64(&params[0], &fid);
+    return execute_statement(mysql_storage->mysql, sql, params);
+#else
+    (void)storage;
+    (void)file_transfer_id;
+    return mysql_not_implemented();
+#endif
+}
+
 static lan_chat_status_t mysql_list_history(
     lan_chat_storage_t *storage,
     lan_chat_user_id_t user_a,
@@ -1026,6 +1410,11 @@ static const lan_chat_storage_vtable_t k_mysql_vtable = {
     mysql_update_last_login,
     mysql_list_users,
     mysql_store_private_message,
+    mysql_create_group,
+    mysql_list_group_members,
+    mysql_store_group_message,
+    mysql_store_file_transfer,
+    mysql_complete_file_transfer,
     mysql_list_history,
     mysql_list_pending_deliveries,
     mysql_mark_delivery_state

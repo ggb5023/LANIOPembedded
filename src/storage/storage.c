@@ -84,6 +84,95 @@ lan_chat_status_t lan_chat_storage_store_private_message(
     return storage->vtable->store_private_message(storage, message, out_message_id, out_delivery_id);
 }
 
+lan_chat_status_t lan_chat_storage_create_group(
+    lan_chat_storage_t *storage,
+    const lan_chat_group_create_t *group,
+    lan_chat_conversation_id_t *out_conversation_id)
+{
+    if (storage == 0) {
+        return LAN_CHAT_STATUS_INVALID_ARGUMENT;
+    }
+    if (storage->vtable == 0 || storage->vtable->create_group == 0) {
+        return storage_missing_method();
+    }
+    return storage->vtable->create_group(storage, group, out_conversation_id);
+}
+
+lan_chat_status_t lan_chat_storage_list_group_members(
+    lan_chat_storage_t *storage,
+    lan_chat_conversation_id_t conversation_id,
+    lan_chat_group_member_record_t *out_members,
+    size_t members_capacity,
+    size_t *out_member_count)
+{
+    if (storage == 0) {
+        return LAN_CHAT_STATUS_INVALID_ARGUMENT;
+    }
+    if (storage->vtable == 0 || storage->vtable->list_group_members == 0) {
+        return storage_missing_method();
+    }
+    return storage->vtable->list_group_members(
+        storage,
+        conversation_id,
+        out_members,
+        members_capacity,
+        out_member_count);
+}
+
+lan_chat_status_t lan_chat_storage_store_group_message(
+    lan_chat_storage_t *storage,
+    const lan_chat_message_record_t *message,
+    lan_chat_message_id_t *out_message_id)
+{
+    if (storage == 0) {
+        return LAN_CHAT_STATUS_INVALID_ARGUMENT;
+    }
+    if (storage->vtable == 0 || storage->vtable->store_group_message == 0) {
+        return storage_missing_method();
+    }
+    return storage->vtable->store_group_message(storage, message, out_message_id);
+}
+
+lan_chat_status_t lan_chat_storage_store_file_transfer(
+    lan_chat_storage_t *storage,
+    const lan_chat_message_record_t *message,
+    const char *file_name,
+    uint64_t file_size,
+    uint32_t crc32,
+    lan_chat_message_id_t *out_message_id,
+    lan_chat_delivery_id_t *out_delivery_id,
+    uint64_t *out_file_transfer_id)
+{
+    if (storage == 0) {
+        return LAN_CHAT_STATUS_INVALID_ARGUMENT;
+    }
+    if (storage->vtable == 0 || storage->vtable->store_file_transfer == 0) {
+        return storage_missing_method();
+    }
+    return storage->vtable->store_file_transfer(
+        storage,
+        message,
+        file_name,
+        file_size,
+        crc32,
+        out_message_id,
+        out_delivery_id,
+        out_file_transfer_id);
+}
+
+lan_chat_status_t lan_chat_storage_complete_file_transfer(
+    lan_chat_storage_t *storage,
+    uint64_t file_transfer_id)
+{
+    if (storage == 0) {
+        return LAN_CHAT_STATUS_INVALID_ARGUMENT;
+    }
+    if (storage->vtable == 0 || storage->vtable->complete_file_transfer == 0) {
+        return storage_missing_method();
+    }
+    return storage->vtable->complete_file_transfer(storage, file_transfer_id);
+}
+
 lan_chat_status_t lan_chat_storage_list_history(
     lan_chat_storage_t *storage,
     lan_chat_user_id_t user_a,

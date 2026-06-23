@@ -22,6 +22,9 @@ typedef struct lan_chat_server {
     int running;
     struct lan_chat_server_client *clients;
     size_t client_capacity;
+    struct lan_chat_server_file_transfer *file_transfers;
+    size_t file_transfer_capacity;
+    uint64_t next_runtime_file_transfer_id;
 } lan_chat_server_t;
 
 typedef struct lan_chat_server_config {

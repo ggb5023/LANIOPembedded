@@ -1,89 +1,132 @@
-# LAN 聊天测试文档
+# LAN Chat Testing
 
-## 1. 文档范围
+## 1. Purpose
 
-本文档是当前工程测试入口。其他架构文档只保留模块验收边界，具体测试分类、运行方式和默认/可选范围以本文档为准。
+This document is the single testing entry point for the current project. Phase
+documents may describe module acceptance intent, but test categories, commands,
+and default/optional boundaries are defined here.
 
-本次测试体系目标是轻量、稳定、可重复，避免把未实现能力写成当前默认测试阻塞项。
+The testing policy stays lightweight and repeatable. Unimplemented capabilities
+must stay in backlog instead of becoming default test blockers.
 
-## 2. 默认测试
+## 2. Default Tests
 
-默认 CTest 只包含不依赖外部服务的测试：
+Default CTest includes only tests that do not require external services:
 
 ```text
 lan_chat_skeleton_tests
 lan_chat_app_e2e
 ```
 
-`lan_chat_skeleton_tests` 覆盖当前库级能力：
+`lan_chat_skeleton_tests` covers current library-level behavior:
 
-- core endian/header/packet/TLV/ring buffer/framer。
-- memory storage 账号、消息、历史和 delivery 状态基础行为。
-- Windows TCP transport heartbeat smoke。
-- server memory storage register/login/chat 库级 E2E。
+- core endian/header/packet/TLV/ring buffer/framer
+- memory storage account, message, history, and delivery basics
+- Windows TCP transport heartbeat smoke
+- server with memory storage register/login/private chat library E2E
 
-`lan_chat_app_e2e` 覆盖当前真实进程闭环：
+`lan_chat_app_e2e` covers the lightweight real process smoke:
 
-- 启动 `chat_server --storage memory`。
-- 执行 `chat_cli e2e --server 127.0.0.1:<port>`。
-- 校验输出包含 `APP_E2E_OK`。
-- 停止 `chat_server`。
+- starts `chat_server --storage memory`
+- runs `chat_cli e2e --server 127.0.0.1:<port>`
+- requires `APP_E2E_OK`
+- stops `chat_server`
 
-默认测试不要求：
+Default tests do not require:
 
-- MySQL 服务可用。
-- UDP discovery。
-- GUI。
-- 好友/联系人系统。
-- presence、kick-old、离线投递、历史查询、ACK 或 RAII 生命周期完整验收。
+- MySQL
+- UDP discovery
+- GUI
+- friends/contacts
+- presence
+- offline delivery
+- history query app workflow
+- ACK/read receipts
+- audio/video
 
-## 3. 可选测试
+## 3. Optional MySQL Tests
 
-MySQL 集成测试为显式可选项：
+MySQL tests are explicit opt-in tests:
 
 ```text
 LAN_CHAT_ENABLE_MYSQL_TESTS=ON
 lan_chat_mysql_storage_tests
+lan_chat_mysql_app_e2e
 ```
 
-该测试需要本机或 CI 提供 MySQL，并通过环境变量或本地配置注入连接信息。普通默认测试不得因为 MySQL 未启动、密码缺失或本机数据库状态而失败。
+`lan_chat_mysql_storage_tests` verifies the storage contract against MySQL.
 
-## 4. 后续 Backlog
+`lan_chat_mysql_app_e2e` is the Phase 6 app-level closure:
 
-以下能力尚未作为当前默认测试阻塞项：
+- recreates `lan_chat_e2e`
+- starts `chat_server --storage mysql`
+- registers Alice, Bob, and Carol
+- verifies online private text
+- verifies online group text fanout
+- verifies online private file relay with size and CRC32 validation
+- requires `APP_E2E_OK`
 
-- presence online/offline。
-- 单账号 kick-old。
-- 用户列表和在线用户列表。
-- receiver offline -> pending delivery。
-- delivery ACK。
-- pending delivery pull。
-- 历史消息查询。
-- heartbeat timeout。
-- 断线重连和 session 恢复。
-- C++ RAII client/server/storage/session 生命周期完整测试。
+The local script default MySQL password is `123456`. It can be overridden with:
 
-这些能力进入对应 Phase 实现后，必须先补文档、接口和最小闭环，再升级为默认测试或可选测试。
+```text
+LAN_CHAT_MYSQL_TEST_PASSWORD
+LAN_CHAT_MYSQL_TEST_HOST
+LAN_CHAT_MYSQL_TEST_PORT
+LAN_CHAT_MYSQL_TEST_USER
+MYSQL_EXE
+```
 
-## 5. 运行命令
+Default CTest must not fail because MySQL is unavailable.
 
-当前 Windows/MSVC Debug 验证命令：
+## 4. Phase 6.1 Stabilization Checks
+
+Phase 6.1 keeps the same feature scope and strengthens engineering behavior:
+
+- duplicate login closes the older session for that user
+- file relay state is cleared when sender or receiver disconnects
+- file chunks must arrive in order
+- receiver rejects unsafe file names and removes partial files on failure
+- CLI listen reports a clear error when expected events are not received
+
+These checks are covered by the existing default and MySQL E2E paths unless a
+future change adds focused unit tests.
+
+## 5. Backlog
+
+The following items are not default blockers yet:
+
+- presence online/offline
+- kick-old as a user-visible workflow
+- user list and online user list app commands
+- offline pending delivery
+- delivery ACK
+- pending delivery pull
+- history query app workflow
+- heartbeat timeout
+- reconnect/session resume
+- C++ RAII lifecycle coverage
+- group admin/member management
+- group file transfer
+- audio/video calls
+
+Each item must first get a small architecture note, an interface boundary, and a
+minimal app closure before it can become a default or optional test requirement.
+
+## 6. Commands
+
+Default Windows/MSVC Debug verification:
 
 ```powershell
-cmake --build out\build\skeleton-verify --config Debug
-ctest --test-dir out\build\skeleton-verify -C Debug --output-on-failure
+& 'E:\Qt\Tools\CMake_64\bin\cmake.exe' --build out\build\skeleton-verify --config Debug
+& 'E:\Qt\Tools\CMake_64\bin\ctest.exe' --test-dir out\build\skeleton-verify -C Debug --output-on-failure
 ```
 
-如果当前 shell 没有 `cmake`，可使用 Visual Studio bundled CMake：
+MySQL-enabled Phase 6 verification:
 
 ```powershell
-& 'D:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe' --build out\build\skeleton-verify --config Debug
-& 'D:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\ctest.exe' --test-dir out\build\skeleton-verify -C Debug --output-on-failure
+& 'E:\Qt\Tools\CMake_64\bin\cmake.exe' -S . -B out\build\phase6-mysql -G "Visual Studio 17 2022" -A x64 -DLAN_CHAT_BUILD_TESTS=ON -DLAN_CHAT_BUILD_APPS=ON -DLAN_CHAT_USE_VCPKG_DEPS=OFF -DLAN_CHAT_CORE_NO_DEPS=ON -DLAN_CHAT_ENABLE_MYSQL_TESTS=ON -DLAN_CHAT_MYSQL_ROOT=D:/mysql
+& 'E:\Qt\Tools\CMake_64\bin\cmake.exe' --build out\build\phase6-mysql --config Debug
+$env:LAN_CHAT_MYSQL_TEST_PASSWORD='123456'
+$env:MYSQL_EXE='D:\mysql\bin\mysql.exe'
+& 'E:\Qt\Tools\CMake_64\bin\ctest.exe' --test-dir out\build\phase6-mysql -C Debug --output-on-failure
 ```
-
-## 6. 文档规则
-
-- “必须覆盖”只用于当前已实现能力或当前 Phase 验收。
-- 未实现能力必须放入 backlog，不写成默认测试要求。
-- 阶段文档可以说明模块验收意图，但测试入口统一引用本文档。
-- 默认测试应保持轻量、可重复、无外部服务依赖。
