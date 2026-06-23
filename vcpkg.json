@@ -6,6 +6,7 @@
     "nlohmann-json",
     "fmt",
     "spdlog",
-    "gtest"
+    "gtest",
+    "opus"
   ]
 }

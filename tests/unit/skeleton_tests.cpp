@@ -513,7 +513,18 @@ enum {
     E2E_CHAT_NOTIFY_FIELD_MESSAGE_ID = 1,
     E2E_CHAT_NOTIFY_FIELD_SENDER_ID = 2,
     E2E_CHAT_NOTIFY_FIELD_CONTENT = 3,
-    E2E_CHAT_NOTIFY_FIELD_DELIVERY_ID = 4
+    E2E_CHAT_NOTIFY_FIELD_DELIVERY_ID = 4,
+    E2E_USER_FIELD_OPERATION = 1,
+    E2E_USER_FIELD_COUNT = 2,
+    E2E_USER_FIELD_USERS_BLOB = 3,
+    E2E_CALL_FIELD_OPERATION = 1,
+    E2E_CALL_FIELD_CALL_ID = 2,
+    E2E_CALL_FIELD_PEER_ID = 3,
+    E2E_CALL_FIELD_MEDIA_MODE = 4,
+    E2E_CALL_FIELD_SDP = 5,
+    E2E_CALL_FIELD_ICE_CANDIDATE = 6,
+    E2E_CALL_FIELD_ICE_MID = 7,
+    E2E_CALL_FIELD_ICE_MLINE_INDEX = 8
 };
 
 struct AuthResult {
@@ -533,6 +544,27 @@ struct ChatNotify {
     lan_chat_user_id_t sender_id = 0;
     lan_chat_delivery_id_t delivery_id = 0;
     std::string content;
+};
+
+struct UserListResult {
+    lan_chat_status_t status = LAN_CHAT_STATUS_INTERNAL_ERROR;
+    std::vector<lan_chat_user_id_t> user_ids;
+};
+
+struct CallResult {
+    lan_chat_status_t status = LAN_CHAT_STATUS_INTERNAL_ERROR;
+    uint64_t call_id = 0;
+};
+
+struct CallNotify {
+    std::string operation;
+    uint64_t call_id = 0;
+    lan_chat_user_id_t peer_id = 0;
+    std::string media_mode;
+    std::string sdp;
+    std::string ice_candidate;
+    std::string ice_mid;
+    uint32_t ice_mline_index = 0;
 };
 
 void flush_connection_once(lan_chat_tcp_connection_t *connection, const char *label)
@@ -570,6 +602,7 @@ std::vector<uint8_t> pump_until_packet(
         require_status(lan_chat_server_run_once(server), LAN_CHAT_STATUS_OK, "server run once");
         flush_connection_once(alice, "alice flush");
         flush_connection_once(bob, "bob flush");
+        flush_connection_once(receiver, "receiver flush");
 
         const lan_chat_status_t status = lan_chat_tcp_connection_recv_packet(
             receiver,
@@ -595,6 +628,14 @@ uint16_t read_tlv_u16_value(const lan_chat_tlv_t &tlv, const char *label)
     uint16_t value = 0;
     require_true(tlv.length == 2, label);
     require_status(lan_chat_read_u16_be(tlv.value, tlv.length, 0, &value), LAN_CHAT_STATUS_OK, label);
+    return value;
+}
+
+uint32_t read_tlv_u32_value(const lan_chat_tlv_t &tlv, const char *label)
+{
+    uint32_t value = 0;
+    require_true(tlv.length == 4, label);
+    require_status(lan_chat_read_u32_be(tlv.value, tlv.length, 0, &value), LAN_CHAT_STATUS_OK, label);
     return value;
 }
 
@@ -716,6 +757,96 @@ void queue_chat_request(
         lan_chat_tcp_connection_queue_packet(connection, &header, body, lan_chat_tlv_writer_size(&writer)),
         LAN_CHAT_STATUS_OK,
         "queue chat request");
+}
+
+void queue_user_list_request(
+    lan_chat_tcp_connection_t *connection,
+    lan_chat_user_id_t sender_id,
+    lan_chat_session_id_t session_id,
+    uint32_t seq)
+{
+    uint8_t body[64]{};
+    lan_chat_tlv_writer_t writer{};
+    lan_chat_header_t header{};
+
+    require_status(lan_chat_tlv_writer_init(&writer, body, sizeof(body)), LAN_CHAT_STATUS_OK, "user tlv writer");
+    require_status(
+        lan_chat_tlv_write_string(&writer, E2E_USER_FIELD_OPERATION, 1, "online-list", 11),
+        LAN_CHAT_STATUS_OK,
+        "user operation tlv");
+    lan_chat_header_init(
+        &header,
+        LAN_CHAT_GROUP_USER,
+        LAN_CHAT_MSG_REQ,
+        LAN_CHAT_FLAG_REQUEST,
+        static_cast<uint32_t>(lan_chat_tlv_writer_size(&writer)));
+    header.seq = seq;
+    header.sender_id = sender_id;
+    header.session_id = session_id;
+    require_status(
+        lan_chat_tcp_connection_queue_packet(connection, &header, body, lan_chat_tlv_writer_size(&writer)),
+        LAN_CHAT_STATUS_OK,
+        "queue user list request");
+}
+
+void queue_call_request(
+    lan_chat_tcp_connection_t *connection,
+    lan_chat_user_id_t sender_id,
+    lan_chat_session_id_t session_id,
+    const char *operation,
+    uint64_t call_id,
+    lan_chat_user_id_t peer_id,
+    const char *media_mode,
+    const char *sdp,
+    const char *ice_candidate,
+    uint32_t seq)
+{
+    uint8_t body[LAN_CHAT_MAX_SIGNALING_TEXT_LEN + 512]{};
+    lan_chat_tlv_writer_t writer{};
+    lan_chat_header_t header{};
+
+    require_status(lan_chat_tlv_writer_init(&writer, body, sizeof(body)), LAN_CHAT_STATUS_OK, "call tlv writer");
+    require_status(
+        lan_chat_tlv_write_string(&writer, E2E_CALL_FIELD_OPERATION, 1, operation, std::strlen(operation)),
+        LAN_CHAT_STATUS_OK,
+        "call operation tlv");
+    if (call_id != 0) {
+        require_status(lan_chat_tlv_write_u64(&writer, E2E_CALL_FIELD_CALL_ID, 1, call_id), LAN_CHAT_STATUS_OK, "call id tlv");
+    }
+    if (peer_id != 0) {
+        require_status(lan_chat_tlv_write_u64(&writer, E2E_CALL_FIELD_PEER_ID, 0, peer_id), LAN_CHAT_STATUS_OK, "call peer tlv");
+    }
+    if (media_mode != nullptr) {
+        require_status(
+            lan_chat_tlv_write_string(&writer, E2E_CALL_FIELD_MEDIA_MODE, 0, media_mode, std::strlen(media_mode)),
+            LAN_CHAT_STATUS_OK,
+            "call media tlv");
+    }
+    if (sdp != nullptr) {
+        require_status(lan_chat_tlv_write_string(&writer, E2E_CALL_FIELD_SDP, 0, sdp, std::strlen(sdp)), LAN_CHAT_STATUS_OK, "call sdp tlv");
+    }
+    if (ice_candidate != nullptr) {
+        require_status(
+            lan_chat_tlv_write_string(&writer, E2E_CALL_FIELD_ICE_CANDIDATE, 0, ice_candidate, std::strlen(ice_candidate)),
+            LAN_CHAT_STATUS_OK,
+            "call ice tlv");
+        require_status(lan_chat_tlv_write_string(&writer, E2E_CALL_FIELD_ICE_MID, 0, "0", 1), LAN_CHAT_STATUS_OK, "call ice mid tlv");
+        require_status(lan_chat_tlv_write_u32(&writer, E2E_CALL_FIELD_ICE_MLINE_INDEX, 0, 0), LAN_CHAT_STATUS_OK, "call ice mline tlv");
+    }
+    lan_chat_header_init(
+        &header,
+        LAN_CHAT_GROUP_CALL,
+        LAN_CHAT_MSG_REQ,
+        LAN_CHAT_FLAG_REQUEST,
+        static_cast<uint32_t>(lan_chat_tlv_writer_size(&writer)));
+    header.seq = seq;
+    header.sender_id = sender_id;
+    header.receiver_id = peer_id;
+    header.session_id = session_id;
+    require_status(
+        lan_chat_tcp_connection_queue_packet(connection, &header, body, lan_chat_tlv_writer_size(&writer)),
+        LAN_CHAT_STATUS_OK,
+        "queue call request");
 }
 
 AuthResult parse_auth_response(const std::vector<uint8_t> &packet, uint32_t expected_seq)
@@ -856,6 +987,163 @@ ChatNotify parse_chat_notify(const std::vector<uint8_t> &packet)
     return notify;
 }
 
+UserListResult parse_user_list_response(const std::vector<uint8_t> &packet, uint32_t expected_seq)
+{
+    UserListResult result{};
+    lan_chat_header_t header{};
+    const uint8_t *body = nullptr;
+    size_t body_len = 0;
+    lan_chat_tlv_reader_t reader{};
+    lan_chat_tlv_t tlv{};
+    lan_chat_status_t status;
+    bool has_status = false;
+
+    unpack_e2e_packet(
+        packet,
+        &header,
+        &body,
+        &body_len,
+        LAN_CHAT_GROUP_USER,
+        LAN_CHAT_MSG_RSP,
+        LAN_CHAT_FLAG_RESPONSE,
+        "user response unpack");
+    require_true(header.seq == expected_seq, "user response seq mismatch");
+    require_status(lan_chat_tlv_reader_init(&reader, body, body_len), LAN_CHAT_STATUS_OK, "user response reader");
+    while ((status = lan_chat_tlv_next(&reader, &tlv)) == LAN_CHAT_STATUS_OK) {
+        switch (tlv.field_id) {
+        case E2E_RESPONSE_FIELD_STATUS:
+            result.status = static_cast<lan_chat_status_t>(read_tlv_u16_value(tlv, "user status tlv"));
+            has_status = true;
+            break;
+        case E2E_USER_FIELD_USERS_BLOB: {
+            size_t offset = 0;
+            while (offset < tlv.length) {
+                uint64_t user_id = 0;
+                uint16_t username_len = 0;
+                uint16_t nickname_len = 0;
+                require_true(tlv.length - offset >= 13, "user blob short record");
+                require_status(lan_chat_read_u64_be(tlv.value, tlv.length, offset, &user_id), LAN_CHAT_STATUS_OK, "user blob id");
+                require_status(lan_chat_read_u16_be(tlv.value, tlv.length, offset + 8, &username_len), LAN_CHAT_STATUS_OK, "user blob username len");
+                require_status(lan_chat_read_u16_be(tlv.value, tlv.length, offset + 10, &nickname_len), LAN_CHAT_STATUS_OK, "user blob nickname len");
+                offset += 12;
+                require_true(tlv.length - offset >= static_cast<size_t>(username_len) + nickname_len + 1, "user blob record len");
+                offset += username_len + nickname_len;
+                require_true(tlv.value[offset] == 1, "user blob online flag");
+                ++offset;
+                result.user_ids.push_back(user_id);
+            }
+            break;
+        }
+        default:
+            break;
+        }
+    }
+    require_status(status, LAN_CHAT_STATUS_NEED_MORE_DATA, "user response reader end");
+    require_true(has_status, "user response missing status");
+    return result;
+}
+
+CallResult parse_call_response(const std::vector<uint8_t> &packet, uint32_t expected_seq)
+{
+    CallResult result{};
+    lan_chat_header_t header{};
+    const uint8_t *body = nullptr;
+    size_t body_len = 0;
+    lan_chat_tlv_reader_t reader{};
+    lan_chat_tlv_t tlv{};
+    lan_chat_status_t status;
+    bool has_status = false;
+
+    unpack_e2e_packet(
+        packet,
+        &header,
+        &body,
+        &body_len,
+        LAN_CHAT_GROUP_CALL,
+        LAN_CHAT_MSG_RSP,
+        LAN_CHAT_FLAG_RESPONSE,
+        "call response unpack");
+    require_true(header.seq == expected_seq, "call response seq mismatch");
+    require_status(lan_chat_tlv_reader_init(&reader, body, body_len), LAN_CHAT_STATUS_OK, "call response reader");
+    while ((status = lan_chat_tlv_next(&reader, &tlv)) == LAN_CHAT_STATUS_OK) {
+        switch (tlv.field_id) {
+        case E2E_RESPONSE_FIELD_STATUS:
+            result.status = static_cast<lan_chat_status_t>(read_tlv_u16_value(tlv, "call status tlv"));
+            has_status = true;
+            break;
+        case E2E_CALL_FIELD_CALL_ID:
+            result.call_id = read_tlv_u64_value(tlv, "call id tlv");
+            break;
+        default:
+            break;
+        }
+    }
+    require_status(status, LAN_CHAT_STATUS_NEED_MORE_DATA, "call response reader end");
+    require_true(has_status, "call response missing status");
+    return result;
+}
+
+CallNotify parse_call_notify(const std::vector<uint8_t> &packet)
+{
+    CallNotify notify{};
+    lan_chat_header_t header{};
+    const uint8_t *body = nullptr;
+    size_t body_len = 0;
+    lan_chat_tlv_reader_t reader{};
+    lan_chat_tlv_t tlv{};
+    lan_chat_status_t status;
+    bool has_operation = false;
+    bool has_call = false;
+    bool has_peer = false;
+
+    unpack_e2e_packet(
+        packet,
+        &header,
+        &body,
+        &body_len,
+        LAN_CHAT_GROUP_CALL,
+        LAN_CHAT_MSG_NOTIFY,
+        LAN_CHAT_FLAG_NOTIFY,
+        "call notify unpack");
+    require_status(lan_chat_tlv_reader_init(&reader, body, body_len), LAN_CHAT_STATUS_OK, "call notify reader");
+    while ((status = lan_chat_tlv_next(&reader, &tlv)) == LAN_CHAT_STATUS_OK) {
+        switch (tlv.field_id) {
+        case E2E_CALL_FIELD_OPERATION:
+            notify.operation = read_tlv_string_value(tlv);
+            has_operation = true;
+            break;
+        case E2E_CALL_FIELD_CALL_ID:
+            notify.call_id = read_tlv_u64_value(tlv, "call notify id");
+            has_call = true;
+            break;
+        case E2E_CALL_FIELD_PEER_ID:
+            notify.peer_id = read_tlv_u64_value(tlv, "call notify peer");
+            has_peer = true;
+            break;
+        case E2E_CALL_FIELD_MEDIA_MODE:
+            notify.media_mode = read_tlv_string_value(tlv);
+            break;
+        case E2E_CALL_FIELD_SDP:
+            notify.sdp = read_tlv_string_value(tlv);
+            break;
+        case E2E_CALL_FIELD_ICE_CANDIDATE:
+            notify.ice_candidate = read_tlv_string_value(tlv);
+            break;
+        case E2E_CALL_FIELD_ICE_MID:
+            notify.ice_mid = read_tlv_string_value(tlv);
+            break;
+        case E2E_CALL_FIELD_ICE_MLINE_INDEX:
+            notify.ice_mline_index = read_tlv_u32_value(tlv, "call notify ice mline");
+            break;
+        default:
+            break;
+        }
+    }
+    require_status(status, LAN_CHAT_STATUS_NEED_MORE_DATA, "call notify reader end");
+    require_true(has_operation && has_call && has_peer, "call notify missing required field");
+    return notify;
+}
+
 void test_server_register_login_chat_e2e()
 {
     lan_chat_storage_t *storage = nullptr;
@@ -938,6 +1226,126 @@ void test_server_register_login_chat_e2e()
 
     lan_chat_tcp_connection_close(&alice);
     lan_chat_tcp_connection_close(&bob);
+    lan_chat_server_shutdown(&server);
+    lan_chat_storage_close(storage);
+}
+
+void test_server_user_list_and_call_signaling_e2e()
+{
+    lan_chat_storage_t *storage = nullptr;
+    lan_chat_server_t server{};
+    lan_chat_server_config_t config{};
+    lan_chat_tcp_connection_t alice{};
+    lan_chat_tcp_connection_t bob{};
+    lan_chat_tcp_connection_t carol{};
+
+    require_status(lan_chat_storage_memory_open(&storage), LAN_CHAT_STATUS_OK, "call memory storage open");
+    config.listen_port = 0;
+    config.worker_thread_count = 1;
+    config.storage = storage;
+    require_status(lan_chat_server_init(&server, &config), LAN_CHAT_STATUS_OK, "call server init");
+
+    require_status(lan_chat_tcp_client_connect(&alice, "127.0.0.1", lan_chat_server_port(&server)), LAN_CHAT_STATUS_OK, "alice call connect");
+    require_status(lan_chat_tcp_client_connect(&bob, "127.0.0.1", lan_chat_server_port(&server)), LAN_CHAT_STATUS_OK, "bob call connect");
+    require_status(lan_chat_tcp_client_connect(&carol, "127.0.0.1", lan_chat_server_port(&server)), LAN_CHAT_STATUS_OK, "carol call connect");
+    pump_server(&server, 8);
+
+    queue_auth_request(&alice, "register", "alice_call", "alice-password", "Alice", 1);
+    AuthResult alice_auth = parse_auth_response(pump_until_packet(&server, &alice, &bob, &alice, "alice call register"), 1);
+    require_status(alice_auth.status, LAN_CHAT_STATUS_OK, "alice call register status");
+
+    queue_auth_request(&bob, "register", "bob_call", "bob-password", "Bob", 2);
+    AuthResult bob_auth = parse_auth_response(pump_until_packet(&server, &alice, &bob, &bob, "bob call register"), 2);
+    require_status(bob_auth.status, LAN_CHAT_STATUS_OK, "bob call register status");
+
+    queue_auth_request(&carol, "register", "carol_call", "carol-password", "Carol", 3);
+    AuthResult carol_auth = parse_auth_response(pump_until_packet(&server, &alice, &bob, &carol, "carol call register"), 3);
+    require_status(carol_auth.status, LAN_CHAT_STATUS_OK, "carol call register status");
+
+    queue_user_list_request(&alice, alice_auth.user_id, alice_auth.session_id, 4);
+    UserListResult users = parse_user_list_response(pump_until_packet(&server, &alice, &bob, &alice, "alice user list"), 4);
+    require_status(users.status, LAN_CHAT_STATUS_OK, "user list status");
+    require_true(std::find(users.user_ids.begin(), users.user_ids.end(), bob_auth.user_id) != users.user_ids.end(), "bob missing from user list");
+    require_true(std::find(users.user_ids.begin(), users.user_ids.end(), alice_auth.user_id) == users.user_ids.end(), "self should not be in user list");
+
+    queue_call_request(&alice, alice_auth.user_id, alice_auth.session_id, "invite", 0, bob_auth.user_id, "audio", nullptr, nullptr, 5);
+    CallResult invite = parse_call_response(pump_until_packet(&server, &alice, &bob, &alice, "alice invite response"), 5);
+    require_status(invite.status, LAN_CHAT_STATUS_OK, "invite status");
+    require_true(invite.call_id != 0, "invite call id");
+    CallNotify bob_invite = parse_call_notify(pump_until_packet(&server, &alice, &bob, &bob, "bob invite notify"));
+    require_true(bob_invite.operation == "invite", "bob invite operation");
+    require_true(bob_invite.call_id == invite.call_id, "bob invite call id");
+    require_true(bob_invite.peer_id == alice_auth.user_id, "bob invite peer");
+    require_true(bob_invite.media_mode == "audio", "bob invite media mode");
+
+    queue_call_request(&carol, carol_auth.user_id, carol_auth.session_id, "invite", 0, bob_auth.user_id, "audio", nullptr, nullptr, 6);
+    CallResult busy = parse_call_response(pump_until_packet(&server, &alice, &bob, &carol, "carol busy response"), 6);
+    require_status(busy.status, LAN_CHAT_STATUS_INVALID_STATE, "busy call status");
+
+    queue_call_request(&alice, alice_auth.user_id, alice_auth.session_id, "invite", 0, alice_auth.user_id, "audio", nullptr, nullptr, 7);
+    CallResult self_call = parse_call_response(pump_until_packet(&server, &alice, &bob, &alice, "alice self call response"), 7);
+    require_status(self_call.status, LAN_CHAT_STATUS_INVALID_ARGUMENT, "self call status");
+
+    queue_call_request(&bob, bob_auth.user_id, bob_auth.session_id, "accept", invite.call_id, 0, nullptr, nullptr, nullptr, 8);
+    CallResult accept = parse_call_response(pump_until_packet(&server, &alice, &bob, &bob, "bob accept response"), 8);
+    require_status(accept.status, LAN_CHAT_STATUS_OK, "accept status");
+    CallNotify alice_accept = parse_call_notify(pump_until_packet(&server, &alice, &bob, &alice, "alice accept notify"));
+    require_true(alice_accept.operation == "accept", "alice accept operation");
+    require_true(alice_accept.peer_id == bob_auth.user_id, "alice accept peer");
+
+    std::string oversized_sdp(LAN_CHAT_MAX_SIGNALING_TEXT_LEN + 1, 'x');
+    queue_call_request(&alice, alice_auth.user_id, alice_auth.session_id, "offer", invite.call_id, 0, nullptr, oversized_sdp.c_str(), nullptr, 9);
+    CallResult oversized_offer = parse_call_response(pump_until_packet(&server, &alice, &bob, &alice, "alice oversized offer response"), 9);
+    require_status(oversized_offer.status, LAN_CHAT_STATUS_BODY_TOO_LARGE, "oversized offer status");
+
+    queue_call_request(&alice, alice_auth.user_id, alice_auth.session_id, "offer", invite.call_id, 0, nullptr, "offer-sdp", nullptr, 10);
+    CallResult offer = parse_call_response(pump_until_packet(&server, &alice, &bob, &alice, "alice offer response"), 10);
+    require_status(offer.status, LAN_CHAT_STATUS_OK, "offer status");
+    CallNotify bob_offer = parse_call_notify(pump_until_packet(&server, &alice, &bob, &bob, "bob offer notify"));
+    require_true(bob_offer.operation == "offer" && bob_offer.sdp == "offer-sdp", "bob offer payload");
+
+    queue_call_request(&bob, bob_auth.user_id, bob_auth.session_id, "answer", invite.call_id, 0, nullptr, "answer-sdp", nullptr, 11);
+    CallResult answer = parse_call_response(pump_until_packet(&server, &alice, &bob, &bob, "bob answer response"), 11);
+    require_status(answer.status, LAN_CHAT_STATUS_OK, "answer status");
+    CallNotify alice_answer = parse_call_notify(pump_until_packet(&server, &alice, &bob, &alice, "alice answer notify"));
+    require_true(alice_answer.operation == "answer" && alice_answer.sdp == "answer-sdp", "alice answer payload");
+
+    queue_call_request(&alice, alice_auth.user_id, alice_auth.session_id, "ice", invite.call_id, 0, nullptr, nullptr, "candidate-a", 12);
+    CallResult ice = parse_call_response(pump_until_packet(&server, &alice, &bob, &alice, "alice ice response"), 12);
+    require_status(ice.status, LAN_CHAT_STATUS_OK, "ice status");
+    CallNotify bob_ice = parse_call_notify(pump_until_packet(&server, &alice, &bob, &bob, "bob ice notify"));
+    require_true(bob_ice.operation == "ice" && bob_ice.ice_candidate == "candidate-a", "bob ice payload");
+
+    queue_call_request(&bob, bob_auth.user_id, bob_auth.session_id, "hangup", invite.call_id, 0, nullptr, nullptr, nullptr, 13);
+    CallResult hangup = parse_call_response(pump_until_packet(&server, &alice, &bob, &bob, "bob hangup response"), 13);
+    require_status(hangup.status, LAN_CHAT_STATUS_OK, "hangup status");
+    CallNotify alice_hangup = parse_call_notify(pump_until_packet(&server, &alice, &bob, &alice, "alice hangup notify"));
+    require_true(alice_hangup.operation == "hangup", "alice hangup operation");
+
+    queue_call_request(&alice, alice_auth.user_id, alice_auth.session_id, "invite", 0, 999999, "audio", nullptr, nullptr, 14);
+    CallResult offline = parse_call_response(pump_until_packet(&server, &alice, &bob, &alice, "offline invite response"), 14);
+    require_status(offline.status, LAN_CHAT_STATUS_NOT_FOUND, "offline invite status");
+
+    queue_call_request(&alice, alice_auth.user_id, alice_auth.session_id, "invite", 0, bob_auth.user_id, "audio", nullptr, nullptr, 15);
+    CallResult reject_invite = parse_call_response(pump_until_packet(&server, &alice, &bob, &alice, "reject invite response"), 15);
+    require_status(reject_invite.status, LAN_CHAT_STATUS_OK, "reject invite status");
+    (void)parse_call_notify(pump_until_packet(&server, &alice, &bob, &bob, "reject bob invite notify"));
+    queue_call_request(&bob, bob_auth.user_id, bob_auth.session_id, "reject", reject_invite.call_id, 0, nullptr, nullptr, nullptr, 16);
+    CallResult reject = parse_call_response(pump_until_packet(&server, &alice, &bob, &bob, "bob reject response"), 16);
+    require_status(reject.status, LAN_CHAT_STATUS_OK, "reject status");
+    CallNotify alice_reject = parse_call_notify(pump_until_packet(&server, &alice, &bob, &alice, "alice reject notify"));
+    require_true(alice_reject.operation == "reject", "alice reject operation");
+
+    queue_call_request(&alice, alice_auth.user_id, alice_auth.session_id, "invite", 0, bob_auth.user_id, "audio", nullptr, nullptr, 17);
+    CallResult disconnect_invite = parse_call_response(pump_until_packet(&server, &alice, &bob, &alice, "disconnect invite response"), 17);
+    require_status(disconnect_invite.status, LAN_CHAT_STATUS_OK, "disconnect invite status");
+    (void)parse_call_notify(pump_until_packet(&server, &alice, &bob, &bob, "disconnect bob invite notify"));
+    lan_chat_tcp_connection_close(&bob);
+    CallNotify disconnect_hangup = parse_call_notify(pump_until_packet(&server, &alice, &bob, &alice, "disconnect hangup notify"));
+    require_true(disconnect_hangup.operation == "hangup", "disconnect hangup operation");
+
+    lan_chat_tcp_connection_close(&alice);
+    lan_chat_tcp_connection_close(&carol);
     lan_chat_server_shutdown(&server);
     lan_chat_storage_close(storage);
 }
@@ -1047,5 +1455,6 @@ int main()
     test_storage_memory_messages();
     test_transport_tcp_smoke();
     test_server_register_login_chat_e2e();
+    test_server_user_list_and_call_signaling_e2e();
     return EXIT_SUCCESS;
 }

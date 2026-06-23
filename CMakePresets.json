@@ -18,6 +18,8 @@
         "VCPKG_TARGET_TRIPLET": "x64-windows",
         "LAN_CHAT_BUILD_TESTS": "ON",
         "LAN_CHAT_BUILD_APPS": "ON",
+        "LAN_CHAT_BUILD_GUI": "OFF",
+        "LAN_CHAT_BUILD_AV": "OFF",
         "LAN_CHAT_USE_VCPKG_DEPS": "ON",
         "LAN_CHAT_CORE_NO_DEPS": "ON"
       }

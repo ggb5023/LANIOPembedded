@@ -48,7 +48,18 @@ enum {
     LAN_CHAT_FILE_FIELD_CHUNK_INDEX = 7,
     LAN_CHAT_FILE_FIELD_CHUNK_DATA = 8,
     LAN_CHAT_FILE_FIELD_MESSAGE_ID = 9,
-    LAN_CHAT_FILE_FIELD_DELIVERY_ID = 10
+    LAN_CHAT_FILE_FIELD_DELIVERY_ID = 10,
+    LAN_CHAT_USER_FIELD_OPERATION = 1,
+    LAN_CHAT_USER_FIELD_COUNT = 2,
+    LAN_CHAT_USER_FIELD_USERS_BLOB = 3,
+    LAN_CHAT_CALL_FIELD_OPERATION = 1,
+    LAN_CHAT_CALL_FIELD_CALL_ID = 2,
+    LAN_CHAT_CALL_FIELD_PEER_ID = 3,
+    LAN_CHAT_CALL_FIELD_MEDIA_MODE = 4,
+    LAN_CHAT_CALL_FIELD_SDP = 5,
+    LAN_CHAT_CALL_FIELD_ICE_CANDIDATE = 6,
+    LAN_CHAT_CALL_FIELD_ICE_MID = 7,
+    LAN_CHAT_CALL_FIELD_ICE_MLINE_INDEX = 8
 };
 
 typedef struct parsed_auth_request {
@@ -87,6 +98,22 @@ typedef struct parsed_file_request {
     size_t chunk_len;
 } parsed_file_request_t;
 
+typedef struct parsed_user_request {
+    char operation[16];
+} parsed_user_request_t;
+
+typedef struct parsed_call_request {
+    char operation[16];
+    uint64_t call_id;
+    lan_chat_user_id_t peer_id;
+    char media_mode[16];
+    char sdp[LAN_CHAT_MAX_SIGNALING_TEXT_LEN + 1];
+    char ice_candidate[LAN_CHAT_MAX_SIGNALING_TEXT_LEN + 1];
+    char ice_mid[64];
+    uint32_t ice_mline_index;
+    int has_ice_mline_index;
+} parsed_call_request_t;
+
 struct lan_chat_server_file_transfer {
     uint8_t active;
     uint64_t runtime_transfer_id;
@@ -100,6 +127,15 @@ struct lan_chat_server_file_transfer {
     uint64_t bytes_seen;
     uint64_t next_chunk_index;
     uint32_t crc32;
+};
+
+struct lan_chat_server_call {
+    uint8_t active;
+    uint64_t call_id;
+    lan_chat_user_id_t caller_id;
+    lan_chat_user_id_t callee_id;
+    uint8_t accepted;
+    char media_mode[16];
 };
 
 struct lan_chat_server_client {
@@ -476,6 +512,117 @@ static lan_chat_status_t parse_file_request(const uint8_t *body, size_t body_len
     return LAN_CHAT_STATUS_OK;
 }
 
+static lan_chat_status_t parse_user_request(const uint8_t *body, size_t body_len, parsed_user_request_t *out)
+{
+    lan_chat_tlv_reader_t reader;
+    lan_chat_tlv_t tlv;
+    lan_chat_status_t status;
+    int has_operation = 0;
+
+    if (out == 0 || (body == 0 && body_len > 0)) {
+        return LAN_CHAT_STATUS_INVALID_ARGUMENT;
+    }
+    memset(out, 0, sizeof(*out));
+    status = lan_chat_tlv_reader_init(&reader, body, body_len);
+    if (status != LAN_CHAT_STATUS_OK) {
+        return status;
+    }
+    while ((status = lan_chat_tlv_next(&reader, &tlv)) == LAN_CHAT_STATUS_OK) {
+        switch (tlv.field_id) {
+        case LAN_CHAT_USER_FIELD_OPERATION:
+            copy_string(out->operation, sizeof(out->operation), (const char *)tlv.value, tlv.length);
+            has_operation = 1;
+            break;
+        default:
+            if (tlv.required) {
+                return LAN_CHAT_STATUS_UNSUPPORTED_FIELD;
+            }
+            break;
+        }
+    }
+    if (status != LAN_CHAT_STATUS_NEED_MORE_DATA) {
+        return status;
+    }
+    if (!has_operation || !string_is_valid(out->operation, sizeof(out->operation) - 1, 0)) {
+        return LAN_CHAT_STATUS_BAD_HEADER;
+    }
+    return LAN_CHAT_STATUS_OK;
+}
+
+static lan_chat_status_t parse_call_request(const uint8_t *body, size_t body_len, parsed_call_request_t *out)
+{
+    lan_chat_tlv_reader_t reader;
+    lan_chat_tlv_t tlv;
+    lan_chat_status_t status;
+    int has_operation = 0;
+
+    if (out == 0 || (body == 0 && body_len > 0)) {
+        return LAN_CHAT_STATUS_INVALID_ARGUMENT;
+    }
+    memset(out, 0, sizeof(*out));
+    status = lan_chat_tlv_reader_init(&reader, body, body_len);
+    if (status != LAN_CHAT_STATUS_OK) {
+        return status;
+    }
+    while ((status = lan_chat_tlv_next(&reader, &tlv)) == LAN_CHAT_STATUS_OK) {
+        switch (tlv.field_id) {
+        case LAN_CHAT_CALL_FIELD_OPERATION:
+            copy_string(out->operation, sizeof(out->operation), (const char *)tlv.value, tlv.length);
+            has_operation = 1;
+            break;
+        case LAN_CHAT_CALL_FIELD_CALL_ID:
+            status = read_tlv_u64(&tlv, &out->call_id);
+            if (status != LAN_CHAT_STATUS_OK) {
+                return status;
+            }
+            break;
+        case LAN_CHAT_CALL_FIELD_PEER_ID:
+            status = read_tlv_u64(&tlv, &out->peer_id);
+            if (status != LAN_CHAT_STATUS_OK) {
+                return status;
+            }
+            break;
+        case LAN_CHAT_CALL_FIELD_MEDIA_MODE:
+            copy_string(out->media_mode, sizeof(out->media_mode), (const char *)tlv.value, tlv.length);
+            break;
+        case LAN_CHAT_CALL_FIELD_SDP:
+            if (tlv.length > LAN_CHAT_MAX_SIGNALING_TEXT_LEN) {
+                return LAN_CHAT_STATUS_BODY_TOO_LARGE;
+            }
+            copy_string(out->sdp, sizeof(out->sdp), (const char *)tlv.value, tlv.length);
+            break;
+        case LAN_CHAT_CALL_FIELD_ICE_CANDIDATE:
+            if (tlv.length > LAN_CHAT_MAX_SIGNALING_TEXT_LEN) {
+                return LAN_CHAT_STATUS_BODY_TOO_LARGE;
+            }
+            copy_string(out->ice_candidate, sizeof(out->ice_candidate), (const char *)tlv.value, tlv.length);
+            break;
+        case LAN_CHAT_CALL_FIELD_ICE_MID:
+            copy_string(out->ice_mid, sizeof(out->ice_mid), (const char *)tlv.value, tlv.length);
+            break;
+        case LAN_CHAT_CALL_FIELD_ICE_MLINE_INDEX:
+            status = read_tlv_u32(&tlv, &out->ice_mline_index);
+            if (status != LAN_CHAT_STATUS_OK) {
+                return status;
+            }
+            out->has_ice_mline_index = 1;
+            break;
+        default:
+            if (tlv.required) {
+                return LAN_CHAT_STATUS_UNSUPPORTED_FIELD;
+            }
+            break;
+        }
+    }
+    if (status != LAN_CHAT_STATUS_NEED_MORE_DATA) {
+        return status;
+    }
+    if (!has_operation || !string_is_valid(out->operation, sizeof(out->operation) - 1, 0)) {
+        return LAN_CHAT_STATUS_BAD_HEADER;
+    }
+    return LAN_CHAT_STATUS_OK;
+}
+
 static lan_chat_status_t queue_packet(
     lan_chat_tcp_connection_t *connection,
     const lan_chat_header_t *request_header,
@@ -827,6 +974,209 @@ static lan_chat_status_t queue_file_complete_notify(
         session_id);
 }
 
+static lan_chat_status_t write_user_record(
+    uint8_t *buffer,
+    size_t capacity,
+    size_t *offset,
+    const struct lan_chat_server_client *client)
+{
+    size_t username_len;
+    size_t nickname_len = 0;
+
+    if (buffer == 0 || offset == 0 || client == 0) {
+        return LAN_CHAT_STATUS_INVALID_ARGUMENT;
+    }
+    username_len = bounded_strlen(client->username, LAN_CHAT_MAX_USERNAME_LEN);
+    if (*offset > capacity || 8 + 2 + 2 + username_len + nickname_len + 1 > capacity - *offset) {
+        return LAN_CHAT_STATUS_BUFFER_TOO_SMALL;
+    }
+    if (lan_chat_write_u64_be(buffer, capacity, *offset, client->user_id) != LAN_CHAT_STATUS_OK ||
+        lan_chat_write_u16_be(buffer, capacity, *offset + 8, (uint16_t)username_len) != LAN_CHAT_STATUS_OK ||
+        lan_chat_write_u16_be(buffer, capacity, *offset + 10, (uint16_t)nickname_len) != LAN_CHAT_STATUS_OK) {
+        return LAN_CHAT_STATUS_INTERNAL_ERROR;
+    }
+    *offset += 12;
+    if (username_len > 0) {
+        memcpy(buffer + *offset, client->username, username_len);
+        *offset += username_len;
+    }
+    buffer[*offset] = 1;
+    *offset += 1;
+    return LAN_CHAT_STATUS_OK;
+}
+
+static lan_chat_status_t queue_user_list_response(
+    lan_chat_server_t *server,
+    size_t client_index,
+    const lan_chat_header_t *request_header,
+    lan_chat_status_t status_code,
+    const char *message)
+{
+    uint8_t users_blob[LAN_CHAT_SERVER_MAX_CLIENTS * (8 + 2 + 2 + LAN_CHAT_MAX_USERNAME_LEN + LAN_CHAT_MAX_NICKNAME_LEN + 1)];
+    uint8_t body[sizeof(users_blob) + 128];
+    lan_chat_tlv_writer_t writer;
+    lan_chat_status_t status;
+    size_t users_len = 0;
+    size_t count = 0;
+    size_t i;
+
+    status = lan_chat_tlv_writer_init(&writer, body, sizeof(body));
+    if (status != LAN_CHAT_STATUS_OK) {
+        return status;
+    }
+    if (status_code == LAN_CHAT_STATUS_OK) {
+        for (i = 0; i < server->client_capacity; ++i) {
+            if (i != client_index &&
+                server->clients[i].connection.is_open &&
+                server->clients[i].authenticated) {
+                status = write_user_record(users_blob, sizeof(users_blob), &users_len, &server->clients[i]);
+                if (status != LAN_CHAT_STATUS_OK) {
+                    return status;
+                }
+                ++count;
+            }
+        }
+    }
+    if ((status = lan_chat_tlv_write_u16(&writer, LAN_CHAT_RESPONSE_FIELD_STATUS, 1, (uint16_t)status_code)) != LAN_CHAT_STATUS_OK) {
+        return status;
+    }
+    if (status_code == LAN_CHAT_STATUS_OK) {
+        if ((status = lan_chat_tlv_write_u64(&writer, LAN_CHAT_USER_FIELD_COUNT, 0, count)) != LAN_CHAT_STATUS_OK ||
+            (status = lan_chat_tlv_write_bytes(&writer, LAN_CHAT_USER_FIELD_USERS_BLOB, 0, users_blob, users_len)) != LAN_CHAT_STATUS_OK) {
+            return status;
+        }
+    }
+    if (message != 0 && message[0] != '\0') {
+        status = lan_chat_tlv_write_string(&writer, LAN_CHAT_RESPONSE_FIELD_MESSAGE, 0, message, bounded_strlen(message, 255));
+        if (status != LAN_CHAT_STATUS_OK) {
+            return status;
+        }
+    }
+    return queue_packet(
+        &server->clients[client_index].connection,
+        request_header,
+        LAN_CHAT_GROUP_USER,
+        LAN_CHAT_MSG_RSP,
+        LAN_CHAT_FLAG_RESPONSE,
+        body,
+        lan_chat_tlv_writer_size(&writer),
+        0,
+        request_header != 0 ? request_header->sender_id : 0,
+        server->clients[client_index].session_id);
+}
+
+static lan_chat_status_t queue_call_status_response(
+    lan_chat_tcp_connection_t *connection,
+    const lan_chat_header_t *request_header,
+    lan_chat_status_t status_code,
+    uint64_t call_id,
+    const char *message)
+{
+    uint8_t body[512];
+    lan_chat_tlv_writer_t writer;
+    lan_chat_status_t status;
+
+    status = lan_chat_tlv_writer_init(&writer, body, sizeof(body));
+    if (status != LAN_CHAT_STATUS_OK) {
+        return status;
+    }
+    if ((status = lan_chat_tlv_write_u16(&writer, LAN_CHAT_RESPONSE_FIELD_STATUS, 1, (uint16_t)status_code)) != LAN_CHAT_STATUS_OK) {
+        return status;
+    }
+    if (call_id != 0) {
+        if ((status = lan_chat_tlv_write_u64(&writer, LAN_CHAT_CALL_FIELD_CALL_ID, 0, call_id)) != LAN_CHAT_STATUS_OK) {
+            return status;
+        }
+    }
+    if (message != 0 && message[0] != '\0') {
+        status = lan_chat_tlv_write_string(&writer, LAN_CHAT_RESPONSE_FIELD_MESSAGE, 0, message, bounded_strlen(message, 255));
+        if (status != LAN_CHAT_STATUS_OK) {
+            return status;
+        }
+    }
+    return queue_packet(
+        connection,
+        request_header,
+        LAN_CHAT_GROUP_CALL,
+        LAN_CHAT_MSG_RSP,
+        LAN_CHAT_FLAG_RESPONSE,
+        body,
+        lan_chat_tlv_writer_size(&writer),
+        0,
+        request_header != 0 ? request_header->sender_id : 0,
+        0);
+}
+
+static lan_chat_status_t queue_call_notify(
+    lan_chat_tcp_connection_t *connection,
+    const char *operation,
+    uint64_t call_id,
+    lan_chat_user_id_t sender_id,
+    lan_chat_user_id_t receiver_id,
+    lan_chat_session_id_t session_id,
+    const char *media_mode,
+    const char *sdp,
+    const char *ice_candidate,
+    const char *ice_mid,
+    uint32_t ice_mline_index,
+    int has_ice_mline_index)
+{
+    uint8_t body[LAN_CHAT_MAX_SIGNALING_TEXT_LEN + 512];
+    lan_chat_tlv_writer_t writer;
+    lan_chat_status_t status;
+
+    status = lan_chat_tlv_writer_init(&writer, body, sizeof(body));
+    if (status != LAN_CHAT_STATUS_OK) {
+        return status;
+    }
+    if ((status = lan_chat_tlv_write_string(&writer, LAN_CHAT_CALL_FIELD_OPERATION, 1, operation, bounded_strlen(operation, 16))) != LAN_CHAT_STATUS_OK ||
+        (status = lan_chat_tlv_write_u64(&writer, LAN_CHAT_CALL_FIELD_CALL_ID, 1, call_id)) != LAN_CHAT_STATUS_OK ||
+        (status = lan_chat_tlv_write_u64(&writer, LAN_CHAT_CALL_FIELD_PEER_ID, 1, sender_id)) != LAN_CHAT_STATUS_OK) {
+        return status;
+    }
+    if (media_mode != 0 && media_mode[0] != '\0') {
+        status = lan_chat_tlv_write_string(&writer, LAN_CHAT_CALL_FIELD_MEDIA_MODE, 0, media_mode, bounded_strlen(media_mode, 16));
+        if (status != LAN_CHAT_STATUS_OK) {
+            return status;
+        }
+    }
+    if (sdp != 0 && sdp[0] != '\0') {
+        status = lan_chat_tlv_write_string(&writer, LAN_CHAT_CALL_FIELD_SDP, 0, sdp, bounded_strlen(sdp, LAN_CHAT_MAX_SIGNALING_TEXT_LEN));
+        if (status != LAN_CHAT_STATUS_OK) {
+            return status;
+        }
+    }
+    if (ice_candidate != 0 && ice_candidate[0] != '\0') {
+        status = lan_chat_tlv_write_string(&writer, LAN_CHAT_CALL_FIELD_ICE_CANDIDATE, 0, ice_candidate, bounded_strlen(ice_candidate, LAN_CHAT_MAX_SIGNALING_TEXT_LEN));
+        if (status != LAN_CHAT_STATUS_OK) {
+            return status;
+        }
+    }
+    if (ice_mid != 0 && ice_mid[0] != '\0') {
+        status = lan_chat_tlv_write_string(&writer, LAN_CHAT_CALL_FIELD_ICE_MID, 0, ice_mid, bounded_strlen(ice_mid, 63));
+        if (status != LAN_CHAT_STATUS_OK) {
+            return status;
+        }
+    }
+    if (has_ice_mline_index) {
+        status = lan_chat_tlv_write_u32(&writer, LAN_CHAT_CALL_FIELD_ICE_MLINE_INDEX, 0, ice_mline_index);
+        if (status != LAN_CHAT_STATUS_OK) {
+            return status;
+        }
+    }
+    return queue_packet(
+        connection,
+        0,
+        LAN_CHAT_GROUP_CALL,
+        LAN_CHAT_MSG_NOTIFY,
+        LAN_CHAT_FLAG_NOTIFY,
+        body,
+        lan_chat_tlv_writer_size(&writer),
+        sender_id,
+        receiver_id,
+        session_id);
+}
+
 static void clear_file_transfers_for_user(lan_chat_server_t *server, lan_chat_user_id_t user_id)
 {
     size_t i;
@@ -906,12 +1256,123 @@ static struct lan_chat_server_file_transfer *find_file_transfer(lan_chat_server_
     return 0;
 }
 
+static struct lan_chat_server_call *find_free_call(lan_chat_server_t *server)
+{
+    size_t i;
+
+    if (server == 0 || server->calls == 0) {
+        return 0;
+    }
+    for (i = 0; i < server->call_capacity; ++i) {
+        if (!server->calls[i].active) {
+            return &server->calls[i];
+        }
+    }
+    return 0;
+}
+
+static struct lan_chat_server_call *find_call(lan_chat_server_t *server, uint64_t call_id)
+{
+    size_t i;
+
+    if (server == 0 || server->calls == 0 || call_id == 0) {
+        return 0;
+    }
+    for (i = 0; i < server->call_capacity; ++i) {
+        if (server->calls[i].active && server->calls[i].call_id == call_id) {
+            return &server->calls[i];
+        }
+    }
+    return 0;
+}
+
+static int call_contains_user(const struct lan_chat_server_call *call, lan_chat_user_id_t user_id)
+{
+    return call != 0 && user_id != 0 && (call->caller_id == user_id || call->callee_id == user_id);
+}
+
+static int user_has_active_call(lan_chat_server_t *server, lan_chat_user_id_t user_id)
+{
+    size_t i;
+
+    if (server == 0 || server->calls == 0 || user_id == 0) {
+        return 0;
+    }
+    for (i = 0; i < server->call_capacity; ++i) {
+        if (server->calls[i].active && call_contains_user(&server->calls[i], user_id)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static lan_chat_user_id_t call_peer_id(const struct lan_chat_server_call *call, lan_chat_user_id_t user_id)
+{
+    if (call == 0) {
+        return 0;
+    }
+    if (call->caller_id == user_id) {
+        return call->callee_id;
+    }
+    if (call->callee_id == user_id) {
+        return call->caller_id;
+    }
+    return 0;
+}
+
 static int server_user_is_online(lan_chat_server_t *server, lan_chat_user_id_t user_id)
 {
     if (server == 0 || user_id == 0) {
         return 0;
     }
     return find_client_by_user_id(server, user_id) < server->client_capacity;
+}
+
+static void clear_calls_for_user(lan_chat_server_t *server, lan_chat_user_id_t user_id, const char *reason)
+{
+    size_t i;
+
+    if (server == 0 || server->calls == 0 || user_id == 0) {
+        return;
+    }
+    for (i = 0; i < server->call_capacity; ++i) {
+        if (server->calls[i].active && call_contains_user(&server->calls[i], user_id)) {
+            lan_chat_user_id_t peer_id = call_peer_id(&server->calls[i], user_id);
+            size_t peer_index = find_client_by_user_id(server, peer_id);
+            if (peer_index < server->client_capacity) {
+                (void)queue_call_notify(
+                    &server->clients[peer_index].connection,
+                    reason != 0 ? reason : "hangup",
+                    server->calls[i].call_id,
+                    user_id,
+                    peer_id,
+                    server->clients[peer_index].session_id,
+                    server->calls[i].media_mode,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0);
+            }
+            memset(&server->calls[i], 0, sizeof(server->calls[i]));
+        }
+    }
+}
+
+static void clear_calls_with_offline_peer(lan_chat_server_t *server)
+{
+    size_t i;
+
+    if (server == 0 || server->calls == 0) {
+        return;
+    }
+    for (i = 0; i < server->call_capacity; ++i) {
+        if (server->calls[i].active &&
+            (!server_user_is_online(server, server->calls[i].caller_id) ||
+             !server_user_is_online(server, server->calls[i].callee_id))) {
+            memset(&server->calls[i], 0, sizeof(server->calls[i]));
+        }
+    }
 }
 
 static void clear_file_transfers_with_offline_peer(lan_chat_server_t *server)
@@ -944,6 +1405,7 @@ static void close_client(lan_chat_server_t *server, size_t index)
         lan_chat_tcp_connection_close(&server->clients[index].connection);
     }
     clear_file_transfers_for_user(server, user_id);
+    clear_calls_for_user(server, user_id, "hangup");
     memset(&server->clients[index], 0, sizeof(server->clients[index]));
 }
 
@@ -1400,6 +1862,180 @@ static lan_chat_status_t handle_file(
     return queue_file_status_response(&server->clients[client_index].connection, header, LAN_CHAT_STATUS_INVALID_ARGUMENT, 0, 0, 0, "unknown file operation");
 }
 
+static lan_chat_status_t handle_user(
+    lan_chat_server_t *server,
+    size_t client_index,
+    const lan_chat_header_t *header,
+    const uint8_t *body,
+    size_t body_len)
+{
+    parsed_user_request_t request;
+    lan_chat_status_t status;
+
+    if (!server->clients[client_index].authenticated) {
+        return queue_user_list_response(server, client_index, header, LAN_CHAT_STATUS_INVALID_STATE, "login required");
+    }
+    status = parse_user_request(body, body_len, &request);
+    if (status != LAN_CHAT_STATUS_OK) {
+        return queue_user_list_response(server, client_index, header, status, "bad user request");
+    }
+    if (strcmp(request.operation, "online-list") != 0) {
+        return queue_user_list_response(server, client_index, header, LAN_CHAT_STATUS_INVALID_ARGUMENT, "unknown user operation");
+    }
+    return queue_user_list_response(server, client_index, header, LAN_CHAT_STATUS_OK, "online users");
+}
+
+static lan_chat_status_t forward_call_payload(
+    lan_chat_server_t *server,
+    size_t client_index,
+    const lan_chat_header_t *header,
+    const parsed_call_request_t *request,
+    struct lan_chat_server_call *call,
+    const char *operation)
+{
+    lan_chat_user_id_t sender_id = server->clients[client_index].user_id;
+    lan_chat_user_id_t peer_id = call_peer_id(call, sender_id);
+    size_t peer_index = find_client_by_user_id(server, peer_id);
+    lan_chat_status_t status;
+
+    if (peer_id == 0) {
+        return queue_call_status_response(&server->clients[client_index].connection, header, LAN_CHAT_STATUS_INVALID_STATE, request->call_id, "not a call participant");
+    }
+    if (peer_index >= server->client_capacity) {
+        memset(call, 0, sizeof(*call));
+        return queue_call_status_response(&server->clients[client_index].connection, header, LAN_CHAT_STATUS_NOT_FOUND, request->call_id, "peer offline");
+    }
+    status = queue_call_notify(
+        &server->clients[peer_index].connection,
+        operation,
+        call->call_id,
+        sender_id,
+        peer_id,
+        server->clients[peer_index].session_id,
+        call->media_mode,
+        request->sdp,
+        request->ice_candidate,
+        request->ice_mid,
+        request->ice_mline_index,
+        request->has_ice_mline_index);
+    if (status != LAN_CHAT_STATUS_OK) {
+        return status;
+    }
+    if (strcmp(operation, "reject") == 0 || strcmp(operation, "hangup") == 0) {
+        memset(call, 0, sizeof(*call));
+    }
+    return queue_call_status_response(&server->clients[client_index].connection, header, LAN_CHAT_STATUS_OK, request->call_id, operation);
+}
+
+static lan_chat_status_t handle_call(
+    lan_chat_server_t *server,
+    size_t client_index,
+    const lan_chat_header_t *header,
+    const uint8_t *body,
+    size_t body_len)
+{
+    parsed_call_request_t request;
+    lan_chat_status_t status;
+    lan_chat_user_id_t sender_id;
+    struct lan_chat_server_call *call;
+
+    if (!server->clients[client_index].authenticated) {
+        return queue_call_status_response(&server->clients[client_index].connection, header, LAN_CHAT_STATUS_INVALID_STATE, 0, "login required");
+    }
+    status = parse_call_request(body, body_len, &request);
+    if (status != LAN_CHAT_STATUS_OK) {
+        return queue_call_status_response(&server->clients[client_index].connection, header, status, 0, "bad call request");
+    }
+
+    sender_id = server->clients[client_index].user_id;
+    if (strcmp(request.operation, "invite") == 0) {
+        size_t callee_index;
+
+        if (request.peer_id == 0 || request.peer_id == sender_id) {
+            return queue_call_status_response(&server->clients[client_index].connection, header, LAN_CHAT_STATUS_INVALID_ARGUMENT, 0, "bad callee");
+        }
+        if (request.media_mode[0] != '\0' && strcmp(request.media_mode, "audio") != 0) {
+            return queue_call_status_response(&server->clients[client_index].connection, header, LAN_CHAT_STATUS_INVALID_ARGUMENT, 0, "unsupported media mode");
+        }
+        if (user_has_active_call(server, sender_id) || user_has_active_call(server, request.peer_id)) {
+            return queue_call_status_response(&server->clients[client_index].connection, header, LAN_CHAT_STATUS_INVALID_STATE, 0, "user busy");
+        }
+        callee_index = find_client_by_user_id(server, request.peer_id);
+        if (callee_index >= server->client_capacity) {
+            return queue_call_status_response(&server->clients[client_index].connection, header, LAN_CHAT_STATUS_NOT_FOUND, 0, "callee offline");
+        }
+        call = find_free_call(server);
+        if (call == 0) {
+            return queue_call_status_response(&server->clients[client_index].connection, header, LAN_CHAT_STATUS_BUFFER_TOO_SMALL, 0, "too many calls");
+        }
+        memset(call, 0, sizeof(*call));
+        call->active = 1;
+        call->call_id = server->next_call_id++;
+        call->caller_id = sender_id;
+        call->callee_id = request.peer_id;
+        copy_string(call->media_mode, sizeof(call->media_mode), "audio", 5);
+        status = queue_call_notify(
+            &server->clients[callee_index].connection,
+            "invite",
+            call->call_id,
+            sender_id,
+            request.peer_id,
+            server->clients[callee_index].session_id,
+            call->media_mode,
+            0,
+            0,
+            0,
+            0,
+            0);
+        if (status != LAN_CHAT_STATUS_OK) {
+            memset(call, 0, sizeof(*call));
+            return status;
+        }
+        return queue_call_status_response(&server->clients[client_index].connection, header, LAN_CHAT_STATUS_OK, call->call_id, "invite sent");
+    }
+
+    call = find_call(server, request.call_id);
+    if (call == 0) {
+        return queue_call_status_response(&server->clients[client_index].connection, header, LAN_CHAT_STATUS_NOT_FOUND, request.call_id, "call not found");
+    }
+
+    if (strcmp(request.operation, "accept") == 0) {
+        if (sender_id != call->callee_id) {
+            return queue_call_status_response(&server->clients[client_index].connection, header, LAN_CHAT_STATUS_INVALID_STATE, request.call_id, "only callee can accept");
+        }
+        call->accepted = 1;
+        return forward_call_payload(server, client_index, header, &request, call, "accept");
+    }
+    if (strcmp(request.operation, "reject") == 0) {
+        if (!call_contains_user(call, sender_id)) {
+            return queue_call_status_response(&server->clients[client_index].connection, header, LAN_CHAT_STATUS_INVALID_STATE, request.call_id, "not a call participant");
+        }
+        return forward_call_payload(server, client_index, header, &request, call, "reject");
+    }
+    if (strcmp(request.operation, "hangup") == 0) {
+        if (!call_contains_user(call, sender_id)) {
+            return queue_call_status_response(&server->clients[client_index].connection, header, LAN_CHAT_STATUS_INVALID_STATE, request.call_id, "not a call participant");
+        }
+        return forward_call_payload(server, client_index, header, &request, call, "hangup");
+    }
+    if (strcmp(request.operation, "offer") == 0 || strcmp(request.operation, "answer") == 0 || strcmp(request.operation, "ice") == 0) {
+        if (!call_contains_user(call, sender_id)) {
+            return queue_call_status_response(&server->clients[client_index].connection, header, LAN_CHAT_STATUS_INVALID_STATE, request.call_id, "not a call participant");
+        }
+        if (strcmp(request.operation, "offer") == 0 && request.sdp[0] == '\0') {
+            return queue_call_status_response(&server->clients[client_index].connection, header, LAN_CHAT_STATUS_INVALID_ARGUMENT, request.call_id, "missing offer sdp");
+        }
+        if (strcmp(request.operation, "answer") == 0 && request.sdp[0] == '\0') {
+            return queue_call_status_response(&server->clients[client_index].connection, header, LAN_CHAT_STATUS_INVALID_ARGUMENT, request.call_id, "missing answer sdp");
+        }
+        if (strcmp(request.operation, "ice") == 0 && request.ice_candidate[0] == '\0') {
+            return queue_call_status_response(&server->clients[client_index].connection, header, LAN_CHAT_STATUS_INVALID_ARGUMENT, request.call_id, "missing ice candidate");
+        }
+        return forward_call_payload(server, client_index, header, &request, call, request.operation);
+    }
+    return queue_call_status_response(&server->clients[client_index].connection, header, LAN_CHAT_STATUS_INVALID_ARGUMENT, request.call_id, "unknown call operation");
+}
+
 static lan_chat_status_t dispatch_packet(
     lan_chat_server_t *server,
     size_t client_index,
@@ -1426,6 +2062,12 @@ static lan_chat_status_t dispatch_packet(
     }
     if (header.message_group == LAN_CHAT_GROUP_FILE && header.message_type == LAN_CHAT_MSG_REQ) {
         return handle_file(server, client_index, &header, body, body_len);
+    }
+    if (header.message_group == LAN_CHAT_GROUP_USER && header.message_type == LAN_CHAT_MSG_REQ) {
+        return handle_user(server, client_index, &header, body, body_len);
+    }
+    if (header.message_group == LAN_CHAT_GROUP_CALL && header.message_type == LAN_CHAT_MSG_REQ) {
+        return handle_call(server, client_index, &header, body, body_len);
     }
     if (header.message_group == LAN_CHAT_GROUP_HEARTBEAT) {
         return queue_packet(
@@ -1496,9 +2138,19 @@ lan_chat_status_t lan_chat_server_init(
         memset(server, 0, sizeof(*server));
         return LAN_CHAT_STATUS_OUT_OF_MEMORY;
     }
+    server->call_capacity = LAN_CHAT_SERVER_MAX_CLIENTS;
+    server->calls = (struct lan_chat_server_call *)calloc(server->call_capacity, sizeof(*server->calls));
+    if (server->calls == 0) {
+        free(server->file_transfers);
+        free(server->clients);
+        memset(server, 0, sizeof(*server));
+        return LAN_CHAT_STATUS_OUT_OF_MEMORY;
+    }
+    server->next_call_id = 1;
 
     status = lan_chat_transport_init(&server->transport);
     if (status != LAN_CHAT_STATUS_OK) {
+        free(server->calls);
         free(server->file_transfers);
         free(server->clients);
         memset(server, 0, sizeof(*server));
@@ -1511,6 +2163,7 @@ lan_chat_status_t lan_chat_server_init(
         LAN_CHAT_TRANSPORT_DEFAULT_BACKLOG);
     if (status != LAN_CHAT_STATUS_OK) {
         lan_chat_transport_shutdown(&server->transport);
+        free(server->calls);
         free(server->file_transfers);
         free(server->clients);
         memset(server, 0, sizeof(*server));
@@ -1557,6 +2210,7 @@ lan_chat_status_t lan_chat_server_run_once(lan_chat_server_t *server)
         }
     }
     clear_file_transfers_with_offline_peer(server);
+    clear_calls_with_offline_peer(server);
     return LAN_CHAT_STATUS_OK;
 }
 
@@ -1582,6 +2236,7 @@ void lan_chat_server_shutdown(lan_chat_server_t *server)
         lan_chat_transport_shutdown(&server->transport);
     }
     free(server->file_transfers);
+    free(server->calls);
     free(server->clients);
     memset(server, 0, sizeof(*server));
 }

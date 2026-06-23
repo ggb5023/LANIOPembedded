@@ -1,63 +1,70 @@
-# LAN 聊天工程开发规则
+# LAN Chat Development Rules
 
-## 1. 当前产品边界
+## 1. Product Boundary
 
-后续开发当前不做 GUI，不做好友聊天系统。
+Phase 7 may start building a lightweight Qt GUI for LAN chat and one-to-one
+audio calls. GUI work must stay tied to the current `chat_server` protocol and
+must not introduce a separate product line.
 
-当前工程主线是 LAN 聊天核心能力，不做 Qt 桌面端、Web 前端、移动端 UI、好友申请、联系人审批、黑名单或社交关系系统。用户关系在当前阶段保持全员可聊模型，后续能力扩展不得依赖好友关系作为前置条件。
+The project still does not build a friends/contact social system. Users remain
+in the all-users-can-communicate model unless a later phase explicitly changes
+that boundary.
 
-## 2. 功能推进顺序
+Out of scope for the current route:
 
-后续工程开发按以下顺序推进：
+- public internet traversal
+- STUN/TURN deployment
+- group calls
+- multi-server federation
+- end-to-end encryption
+- mobile or web clients
+- friends/contact approval workflow
 
-1. 私聊文本。
-2. 群聊文本。
-3. 文件传输。
-4. 音频通话。
-5. 视频通话。
+## 2. Feature Order
 
-每个阶段必须先完成可运行闭环，再扩展体验和边界功能。不得跳过私聊文本稳定性去提前做群聊、文件或音视频。
-
-## 3. 实际工程开发要求
-
-所有后续设计和实现必须符合实际工程开发方式：
-
-- 先明确需求、边界、接口和验收。
-- 再实现工程骨架、最小闭环和测试。
-- 每个能力都应有文档、实现、构建验证和 E2E 验收。
-- 配置、日志、错误处理、资源释放和测试可重复性必须作为工程内容处理。
-- 不把 demo 代码、临时密码、本机路径或一次性脚本作为生产接口。
-- 不为了未来可能性引入过重抽象。
-
-## 4. 设计原则
-
-工程设计原则固定为：轻量边界，稳定可靠。
-
-轻量边界：
-
-- 模块只暴露当前阶段需要的最小接口。
-- C ABI 不泄漏平台私有类型、数据库私有类型或 C++ 异常。
-- 业务层依赖抽象接口，不直接穿透到 MySQL、WinSock 或平台 API。
-- 能用清晰结构解决的问题，不提前引入复杂框架。
-
-稳定可靠：
-
-- 网络、存储、协议和资源生命周期必须有明确错误返回。
-- 所有 socket、storage、server/client 生命周期必须可重复初始化和关闭。
-- E2E 测试优先覆盖真实进程和真实 TCP 路径。
-- 默认测试不依赖外部 MySQL 服务；MySQL 集成测试单独开关。
-- 每个阶段结束前必须能从干净构建目录重新构建并通过测试。
-
-## 5. 对后续 Phase 的约束
-
-后续 Phase 命名和验收必须围绕当前路线：
+Development order is fixed:
 
 ```text
 private text
   -> group text
-    -> file transfer
-      -> audio call
-        -> video call
+    -> private file transfer
+      -> GUI one-to-one audio call
+        -> GUI one-to-one video call
 ```
 
-GUI、好友/联系人系统、复杂社交关系、公开互联网穿透、多服务端联邦和端到端加密均不属于当前后续开发主线。
+Each phase must finish a runnable closure before the next phase begins. Phase 7
+is audio-only. Video UI, camera capture, H.264, and remote video rendering are
+reserved for Phase 8.
+
+## 3. Engineering Rules
+
+- Define requirements, boundaries, protocol, and acceptance before broad coding.
+- Keep default build and default CTest lightweight and independent from Qt,
+  libdatachannel, real audio devices, and MySQL.
+- Put heavy GUI/AV dependencies behind explicit CMake options.
+- Keep C ABI free of Qt, C++ exceptions, MySQL private types, and media-library
+  private types.
+- Keep business code behind current storage/transport/protocol abstractions.
+- Do not use reference-project absolute paths as production dependencies.
+- Do not turn temporary local passwords, local machine paths, or one-off scripts
+  into stable public interfaces.
+
+## 4. Design Principles
+
+The design principle remains: lightweight boundary, stable reliability.
+
+Lightweight boundary:
+
+- expose only the minimum interface required by the current phase;
+- prefer small protocol groups and explicit runtime state over broad framework
+  rewrites;
+- avoid introducing a second signaling server while the current server can route
+  LAN call signaling.
+
+Stable reliability:
+
+- every socket, storage, server, client, GUI, and media lifecycle must have
+  explicit init/shutdown behavior;
+- online runtime state must be cleared on disconnect;
+- tests must cover protocol/state-machine behavior before manual media testing;
+- each phase must be rebuildable from a clean build directory.

@@ -24,6 +24,7 @@ lan_chat_app_e2e
 - memory storage account, message, history, and delivery basics
 - Windows TCP transport heartbeat smoke
 - server with memory storage register/login/private chat library E2E
+- Phase 7 server online-user list and audio-call signaling state machine
 
 `lan_chat_app_e2e` covers the lightweight real process smoke:
 
@@ -37,6 +38,9 @@ Default tests do not require:
 - MySQL
 - UDP discovery
 - GUI
+- Qt
+- libdatachannel
+- real microphone or speaker devices
 - friends/contacts
 - presence
 - offline delivery
@@ -109,7 +113,8 @@ The following items are not default blockers yet:
 - C++ RAII lifecycle coverage
 - group admin/member management
 - group file transfer
-- audio/video calls
+- GUI audio media device E2E
+- video calls
 
 Each item must first get a small architecture note, an interface boundary, and a
 minimal app closure before it can become a default or optional test requirement.
